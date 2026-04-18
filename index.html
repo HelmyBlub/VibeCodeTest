@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Game Prototype</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { overflow: hidden; background: #000; }
+        #renderCanvas { width: 100vw; height: 100vh; display: block; touch-action: none; }
+        #hud {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-family: sans-serif;
+            font-size: 14px;
+            text-shadow: 1px 1px 3px black;
+            text-align: center;
+            pointer-events: none;
+            background: rgba(0,0,0,0.35);
+            padding: 6px 16px;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
+    <div id="hud">WASD — move &nbsp;|&nbsp; Left-drag — rotate camera &nbsp;|&nbsp; Scroll — zoom</div>
+
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script>
+        const canvas = document.getElementById('renderCanvas');
+        const engine = new BABYLON.Engine(canvas, true);
+
+        function createScene() {
+            const scene = new BABYLON.Scene(engine);
+            scene.clearColor = new BABYLON.Color4(0.45, 0.65, 0.9, 1);
+
+            // --- Lighting ---
+            const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), scene);
+            hemi.intensity = 0.7;
+            const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-1, -2, -1), scene);
+            sun.intensity = 0.5;
+            sun.position = new BABYLON.Vector3(30, 50, 30);
+
+            // --- Ground ---
+            const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 100, height: 100 }, scene);
+            const groundMat = new BABYLON.StandardMaterial("groundMat", scene);
+            groundMat.diffuseColor = new BABYLON.Color3(0.25, 0.55, 0.15);
+            groundMat.specularColor = new BABYLON.Color3(0, 0, 0);
+            ground.material = groundMat;
+
+            // --- Character ---
+            const characterRoot = new BABYLON.TransformNode("characterRoot", scene);
+            characterRoot.position = BABYLON.Vector3.Zero();
+
+            const body = BABYLON.MeshBuilder.CreateCapsule("body", { height: 1.6, radius: 0.3, tessellation: 12 }, scene);
+            body.position.y = 0.8;
+            body.parent = characterRoot;
+            const bodyMat = new BABYLON.StandardMaterial("bodyMat", scene);
+            bodyMat.diffuseColor = new BABYLON.Color3(0.15, 0.35, 0.75);
+            body.material = bodyMat;
+
+            const head = BABYLON.MeshBuilder.CreateSphere("head", { diameter: 0.45, segments: 8 }, scene);
+            head.position.y = 1.85;
+            head.parent = characterRoot;
+            const headMat = new BABYLON.StandardMaterial("headMat", scene);
+            headMat.diffuseColor = new BABYLON.Color3(0.9, 0.75, 0.6);
+            head.material = headMat;
+
+            // --- Third-person camera ---
+            const camera = new BABYLON.ArcRotateCamera("camera", -Math.PI / 2, Math.PI / 3.5, 9, new BABYLON.Vector3(0, 1, 0), scene);
+            camera.lowerRadiusLimit = 3;
+            camera.upperRadiusLimit = 18;
+            camera.upperBetaLimit = Math.PI / 2 - 0.05;
+            camera.lowerBetaLimit = 0.15;
+
+            // Remove built-in pointer input — we handle rotation manually so pointer lock works
+            camera.inputs.removeByType("ArcRotateCameraPointersInput");
+
+            // Keep scroll-to-zoom working
+            canvas.addEventListener('wheel', e => {
+                camera.radius = Math.max(camera.lowerRadiusLimit,
+                    Math.min(camera.upperRadiusLimit, camera.radius + e.deltaY * 0.02));
+                e.preventDefault();
+            }, { passive: false });
+
+            // Left-click: grab pointer lock; release: free it
+            const SENSITIVITY = 1 / 700; // lower = faster, raise = slower
+            let rotating = false;
+            canvas.addEventListener('mousedown', e => {
+                if (e.button === 0) { rotating = true; canvas.requestPointerLock(); }
+            });
+            document.addEventListener('mouseup', e => {
+                if (e.button === 0) {
+                    rotating = false;
+                    if (document.pointerLockElement === canvas) document.exitPointerLock();
+                }
+            });
+            document.addEventListener('mousemove', e => {
+                if (!rotating) return;
+                camera.alpha -= e.movementX * SENSITIVITY;
+                camera.beta  = Math.max(camera.lowerBetaLimit,
+                    Math.min(camera.upperBetaLimit, camera.beta - e.movementY * SENSITIVITY));
+            });
+
+            // --- Environment: trees ---
+            const foliageMat = new BABYLON.StandardMaterial("foliageMat", scene);
+            foliageMat.diffuseColor = new BABYLON.Color3(0.1, 0.4, 0.1);
+            const trunkMat = new BABYLON.StandardMaterial("trunkMat", scene);
+            trunkMat.diffuseColor = new BABYLON.Color3(0.4, 0.25, 0.1);
+
+            [
+                [8, 8], [-10, 5], [5, -12], [-7, -9],
+                [15, -3], [-14, 12], [12, 15], [-5, 18]
+            ].forEach(([x, z], i) => {
+                const trunk = BABYLON.MeshBuilder.CreateCylinder(`trunk${i}`, { height: 2, diameterTop: 0.3, diameterBottom: 0.45 }, scene);
+                trunk.position = new BABYLON.Vector3(x, 1, z);
+                trunk.material = trunkMat;
+                const foliage = BABYLON.MeshBuilder.CreateSphere(`foliage${i}`, { diameter: 3, segments: 6 }, scene);
+                foliage.position = new BABYLON.Vector3(x, 3.6, z);
+                foliage.scaling.y = 1.2;
+                foliage.material = foliageMat;
+            });
+
+            // --- Environment: rocks ---
+            const rockMat = new BABYLON.StandardMaterial("rockMat", scene);
+            rockMat.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+            [[3, 6], [-4, -3], [10, -8], [-12, -6]].forEach(([x, z], i) => {
+                const rock = BABYLON.MeshBuilder.CreateSphere(`rock${i}`, { diameter: 1.2, segments: 5 }, scene);
+                rock.position = new BABYLON.Vector3(x, 0.4, z);
+                rock.scaling = new BABYLON.Vector3(1, 0.65, 1.3);
+                rock.material = rockMat;
+            });
+
+            // --- Input ---
+            const keys = {};
+            window.addEventListener('keydown', e => {
+                keys[e.key.toLowerCase()] = true;
+                // Prevent arrow keys / space from scrolling the page
+                if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) {
+                    e.preventDefault();
+                }
+            });
+            window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+            const MOVE_SPEED = 0.1;
+            const BOUNDARY = 47;
+
+            scene.onBeforeRenderObservable.add(() => {
+                // Direction from camera toward character (projected onto XZ plane)
+                const camToChar = characterRoot.position.subtract(camera.position);
+                camToChar.y = 0;
+                if (camToChar.length() < 0.01) return;
+                const forward = camToChar.normalize();
+                const right = BABYLON.Vector3.Cross(BABYLON.Vector3.Up(), forward).normalize();
+
+                let move = BABYLON.Vector3.Zero();
+                if (keys['w'] || keys['arrowup'])    move.addInPlace(forward);
+                if (keys['s'] || keys['arrowdown'])  move.subtractInPlace(forward);
+                if (keys['a'] || keys['arrowleft'])  move.subtractInPlace(right);
+                if (keys['d'] || keys['arrowright']) move.addInPlace(right);
+
+                if (move.length() > 0.01) {
+                    move.normalize().scaleInPlace(MOVE_SPEED);
+
+                    const next = characterRoot.position.add(move);
+                    next.x = Math.max(-BOUNDARY, Math.min(BOUNDARY, next.x));
+                    next.z = Math.max(-BOUNDARY, Math.min(BOUNDARY, next.z));
+                    characterRoot.position.copyFrom(next);
+
+                    // Rotate character to face movement direction
+                    characterRoot.rotation.y = Math.atan2(move.x, move.z);
+                }
+
+                // Camera locked to player, no smoothing
+                camera.target.copyFrom(characterRoot.position);
+                camera.target.y += 1;
+            });
+
+            return scene;
+        }
+
+        const scene = createScene();
+        engine.runRenderLoop(() => scene.render());
+        window.addEventListener('resize', () => engine.resize());
+    </script>
+</body>
+</html>
