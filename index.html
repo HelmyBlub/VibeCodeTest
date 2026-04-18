@@ -70,39 +70,38 @@
             head.material = headMat;
 
             // --- Third-person camera ---
+            // No attachControl — all input handled manually so pointer lock works correctly
             const camera = new BABYLON.ArcRotateCamera("camera", -Math.PI / 2, Math.PI / 3.5, 9, new BABYLON.Vector3(0, 1, 0), scene);
             camera.lowerRadiusLimit = 3;
             camera.upperRadiusLimit = 18;
             camera.upperBetaLimit = Math.PI / 2 - 0.05;
             camera.lowerBetaLimit = 0.15;
 
-            // Remove built-in pointer input — we handle rotation manually so pointer lock works
-            camera.inputs.removeByType("ArcRotateCameraPointersInput");
-
-            // Keep scroll-to-zoom working
+            // Scroll to zoom
             canvas.addEventListener('wheel', e => {
                 camera.radius = Math.max(camera.lowerRadiusLimit,
                     Math.min(camera.upperRadiusLimit, camera.radius + e.deltaY * 0.02));
                 e.preventDefault();
             }, { passive: false });
 
-            // Left-click: grab pointer lock; release: free it
-            const SENSITIVITY = 1 / 700; // lower = faster, raise = slower
+            // Left-click + drag: lock pointer and rotate camera
+            const SENSITIVITY = 1 / 700; // decrease value = faster turning
             let rotating = false;
-            canvas.addEventListener('mousedown', e => {
-                if (e.button === 0) { rotating = true; canvas.requestPointerLock(); }
-            });
-            document.addEventListener('mouseup', e => {
-                if (e.button === 0) {
+
+            // Use Babylon's own pointer observable — avoids conflicts with its internal event handling
+            scene.onPointerObservable.add((info) => {
+                const e = info.event;
+                if (info.type === BABYLON.PointerEventTypes.POINTERDOWN && e.button === 0) {
+                    rotating = true;
+                    canvas.requestPointerLock();
+                } else if (info.type === BABYLON.PointerEventTypes.POINTERUP && e.button === 0) {
                     rotating = false;
                     if (document.pointerLockElement === canvas) document.exitPointerLock();
+                } else if (info.type === BABYLON.PointerEventTypes.POINTERMOVE && rotating) {
+                    camera.alpha -= e.movementX * SENSITIVITY;
+                    camera.beta = Math.max(camera.lowerBetaLimit,
+                        Math.min(camera.upperBetaLimit, camera.beta - e.movementY * SENSITIVITY));
                 }
-            });
-            document.addEventListener('mousemove', e => {
-                if (!rotating) return;
-                camera.alpha -= e.movementX * SENSITIVITY;
-                camera.beta  = Math.max(camera.lowerBetaLimit,
-                    Math.min(camera.upperBetaLimit, camera.beta - e.movementY * SENSITIVITY));
             });
 
             // --- Environment: trees ---
