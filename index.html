@@ -146,6 +146,10 @@
 
             const MOVE_SPEED = 0.1;
             const BOUNDARY = 47;
+            const GRAVITY = -0.01;
+            const JUMP_FORCE = 0.25;
+            let velocityY = 0;
+            let onGround = true;
 
             scene.onBeforeRenderObservable.add(() => {
                 // Direction from camera toward character (projected onto XZ plane)
@@ -171,6 +175,22 @@
 
                     // Rotate character to face movement direction
                     characterRoot.rotation.y = Math.atan2(move.x, move.z);
+                }
+
+                // Jump
+                if (keys[' '] && onGround) {
+                    velocityY = JUMP_FORCE;
+                    onGround = false;
+                }
+
+                // Gravity
+                velocityY += GRAVITY;
+                characterRoot.position.y += velocityY;
+
+                if (characterRoot.position.y <= 0) {
+                    characterRoot.position.y = 0;
+                    velocityY = 0;
+                    onGround = true;
                 }
 
                 // Camera locked to player, no smoothing
