@@ -22,11 +22,61 @@
             padding: 6px 16px;
             border-radius: 8px;
         }
+        #player-hp {
+            position: absolute;
+            bottom: 60px;
+            left: 20px;
+            width: 200px;
+            pointer-events: none;
+            font-family: sans-serif;
+            color: white;
+            font-size: 13px;
+            text-shadow: 1px 1px 2px black;
+        }
+        #hp-track {
+            width: 100%;
+            height: 18px;
+            background: rgba(0,0,0,0.55);
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 3px;
+        }
+        #hp-fill {
+            height: 100%;
+            width: 100%;
+            background: linear-gradient(to right, #c00, #f44);
+            border-radius: 4px;
+        }
+        #game-over {
+            display: none;
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.75);
+            color: white;
+            font-family: sans-serif;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 52px;
+            text-shadow: 0 0 20px red;
+        }
+        #game-over span {
+            font-size: 18px;
+            margin-top: 16px;
+            text-shadow: none;
+            opacity: 0.7;
+        }
     </style>
 </head>
 <body>
     <canvas id="renderCanvas"></canvas>
-    <div id="hud">WASD — move &nbsp;|&nbsp; Left-drag — rotate camera &nbsp;|&nbsp; Scroll — zoom</div>
+    <div id="hud">WASD — move &nbsp;|&nbsp; Space — jump &nbsp;|&nbsp; Q — fireball &nbsp;|&nbsp; Left-drag — camera</div>
+    <div id="player-hp">
+        HP: <span id="hp-text">100</span>
+        <div id="hp-track"><div id="hp-fill"></div></div>
+    </div>
+    <div id="game-over"><div>YOU DIED</div><span>Refresh to restart</span></div>
 
     <script src="https://cdn.babylonjs.com/babylon.js"></script>
     <script>
@@ -151,6 +201,105 @@
             let velocityY = 0;
             let onGround = true;
 
+            // --- Player HP ---
+            const PLAYER_MAX_HP = 100;
+            let playerHP = PLAYER_MAX_HP;
+            let gameover = false;
+            const hpFillEl  = document.getElementById('hp-fill');
+            const hpTextEl  = document.getElementById('hp-text');
+            const gameOverEl = document.getElementById('game-over');
+
+            function damagePlayer(amount) {
+                if (gameover) return;
+                playerHP = Math.max(0, playerHP - amount);
+                hpFillEl.style.width = (playerHP / PLAYER_MAX_HP * 100) + '%';
+                hpTextEl.textContent = playerHP;
+                if (playerHP <= 0) { gameover = true; gameOverEl.style.display = 'flex'; }
+            }
+
+            // --- Enemy shared materials ---
+            const enemyBodyMat = new BABYLON.StandardMaterial("enemyBodyMat", scene);
+            enemyBodyMat.diffuseColor = new BABYLON.Color3(0.7, 0.1, 0.1);
+            const enemyHeadMat = new BABYLON.StandardMaterial("enemyHeadMat", scene);
+            enemyHeadMat.diffuseColor = new BABYLON.Color3(0.6, 0.3, 0.2);
+            const hpBgMat = new BABYLON.StandardMaterial("hpBgMat", scene);
+            hpBgMat.diffuseColor = new BABYLON.Color3(0.15, 0.15, 0.15);
+            hpBgMat.emissiveColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+            const hpFillMat = new BABYLON.StandardMaterial("hpFillMat", scene);
+            hpFillMat.diffuseColor = new BABYLON.Color3(0.9, 0.1, 0.1);
+            hpFillMat.emissiveColor = new BABYLON.Color3(0.4, 0.0, 0.0);
+
+            // --- Enemies ---
+            const ENEMY_MAX_HP = 50;
+            const ENEMY_SPEED = 0.028;
+            const ENEMY_MELEE_RANGE = 1.8;
+            const ENEMY_MELEE_DAMAGE = 10;
+            const ENEMY_MELEE_INTERVAL = 1000;
+            const enemies = [];
+
+            function spawnEnemy(x, z) {
+                const id = enemies.length;
+                const root = new BABYLON.TransformNode(`en${id}`, scene);
+                root.position = new BABYLON.Vector3(x, 0, z);
+
+                const eb = BABYLON.MeshBuilder.CreateCapsule(`enB${id}`, { height: 1.6, radius: 0.3, tessellation: 10 }, scene);
+                eb.position.y = 0.8; eb.parent = root; eb.material = enemyBodyMat;
+
+                const eh = BABYLON.MeshBuilder.CreateSphere(`enH${id}`, { diameter: 0.45, segments: 6 }, scene);
+                eh.position.y = 1.85; eh.parent = root; eh.material = enemyHeadMat;
+
+                const hpBg = BABYLON.MeshBuilder.CreateBox(`enHpBg${id}`, { width: 1.0, height: 0.13, depth: 0.06 }, scene);
+                hpBg.position.y = 2.6; hpBg.parent = root;
+                hpBg.material = hpBgMat; hpBg.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+
+                const hpBar = BABYLON.MeshBuilder.CreateBox(`enHpBar${id}`, { width: 1.0, height: 0.13, depth: 0.08 }, scene);
+                hpBar.position.y = 2.6; hpBar.parent = root;
+                hpBar.material = hpFillMat; hpBar.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+
+                enemies.push({ root, eb, eh, hpBg, hpBar, hp: ENEMY_MAX_HP, lastMelee: 0 });
+            }
+
+            [[-18,-18],[18,-18],[-18,18],[18,18],[0,-22],[22,0],[-22,0]].forEach(([x,z]) => spawnEnemy(x, z));
+
+            // --- Fireballs ---
+            const FIREBALL_SPEED = 0.45;
+            const FIREBALL_DAMAGE = 25;
+            const FIREBALL_LIFETIME = 110;
+            const FIREBALL_COOLDOWN = 800;
+            const fireballs = [];
+            let lastFireTime = 0;
+
+            const fbMat = new BABYLON.StandardMaterial("fbMat", scene);
+            fbMat.diffuseColor  = new BABYLON.Color3(1, 0.4, 0);
+            fbMat.emissiveColor = new BABYLON.Color3(1, 0.3, 0);
+
+            function castFireball() {
+                const now = Date.now();
+                if (now - lastFireTime < FIREBALL_COOLDOWN || gameover) return;
+                lastFireTime = now;
+
+                const camToChar = characterRoot.position.subtract(camera.position);
+                camToChar.y = 0;
+                if (camToChar.length() < 0.01) return;
+                const dir = camToChar.normalize();
+
+                const fb = BABYLON.MeshBuilder.CreateSphere("fb", { diameter: 0.42, segments: 6 }, scene);
+                fb.position = characterRoot.position.clone();
+                fb.position.y += 1.2;
+                fb.position.addInPlace(dir.scale(0.6));
+                fb.material = fbMat;
+
+                const light = new BABYLON.PointLight("fbLight", fb.position.clone(), scene);
+                light.diffuse = new BABYLON.Color3(1, 0.5, 0);
+                light.intensity = 1.5; light.range = 6;
+
+                fireballs.push({ mesh: fb, light, vel: dir.scale(FIREBALL_SPEED), life: FIREBALL_LIFETIME });
+            }
+
+            window.addEventListener('keydown', e => {
+                if (e.key.toLowerCase() === 'q') castFireball();
+            });
+
             scene.onBeforeRenderObservable.add(() => {
                 // Direction from camera toward character (projected onto XZ plane)
                 const camToChar = characterRoot.position.subtract(camera.position);
@@ -159,38 +308,77 @@
                 const forward = camToChar.normalize();
                 const right = BABYLON.Vector3.Cross(BABYLON.Vector3.Up(), forward).normalize();
 
-                let move = BABYLON.Vector3.Zero();
-                if (keys['w'] || keys['arrowup'])    move.addInPlace(forward);
-                if (keys['s'] || keys['arrowdown'])  move.subtractInPlace(forward);
-                if (keys['a'] || keys['arrowleft'])  move.subtractInPlace(right);
-                if (keys['d'] || keys['arrowright']) move.addInPlace(right);
+                if (!gameover) {
+                    let move = BABYLON.Vector3.Zero();
+                    if (keys['w'] || keys['arrowup'])    move.addInPlace(forward);
+                    if (keys['s'] || keys['arrowdown'])  move.subtractInPlace(forward);
+                    if (keys['a'] || keys['arrowleft'])  move.subtractInPlace(right);
+                    if (keys['d'] || keys['arrowright']) move.addInPlace(right);
 
-                if (move.length() > 0.01) {
-                    move.normalize().scaleInPlace(MOVE_SPEED);
+                    if (move.length() > 0.01) {
+                        move.normalize().scaleInPlace(MOVE_SPEED);
+                        const next = characterRoot.position.add(move);
+                        next.x = Math.max(-BOUNDARY, Math.min(BOUNDARY, next.x));
+                        next.z = Math.max(-BOUNDARY, Math.min(BOUNDARY, next.z));
+                        characterRoot.position.copyFrom(next);
+                        characterRoot.rotation.y = Math.atan2(move.x, move.z);
+                    }
 
-                    const next = characterRoot.position.add(move);
-                    next.x = Math.max(-BOUNDARY, Math.min(BOUNDARY, next.x));
-                    next.z = Math.max(-BOUNDARY, Math.min(BOUNDARY, next.z));
-                    characterRoot.position.copyFrom(next);
-
-                    // Rotate character to face movement direction
-                    characterRoot.rotation.y = Math.atan2(move.x, move.z);
+                    if (keys[' '] && onGround) { velocityY = JUMP_FORCE; onGround = false; }
                 }
 
-                // Jump
-                if (keys[' '] && onGround) {
-                    velocityY = JUMP_FORCE;
-                    onGround = false;
-                }
-
-                // Gravity
+                // Gravity always applies
                 velocityY += GRAVITY;
                 characterRoot.position.y += velocityY;
-
                 if (characterRoot.position.y <= 0) {
-                    characterRoot.position.y = 0;
-                    velocityY = 0;
-                    onGround = true;
+                    characterRoot.position.y = 0; velocityY = 0; onGround = true;
+                }
+
+                // --- Update fireballs ---
+                for (let i = fireballs.length - 1; i >= 0; i--) {
+                    const fb = fireballs[i];
+                    fb.mesh.position.addInPlace(fb.vel);
+                    fb.light.position.copyFrom(fb.mesh.position);
+                    fb.life--;
+
+                    let hit = false;
+                    for (const en of enemies) {
+                        if (en.hp <= 0) continue;
+                        const dist = BABYLON.Vector3.Distance(fb.mesh.position, en.root.position.add(new BABYLON.Vector3(0, 1, 0)));
+                        if (dist < 1.0) {
+                            en.hp -= FIREBALL_DAMAGE;
+                            const ratio = Math.max(0, en.hp / ENEMY_MAX_HP);
+                            en.hpBar.scaling.x = ratio;
+                            if (en.hp <= 0) {
+                                en.eb.dispose(); en.eh.dispose();
+                                en.hpBg.dispose(); en.hpBar.dispose(); en.root.dispose();
+                            }
+                            hit = true; break;
+                        }
+                    }
+
+                    if (hit || fb.life <= 0) {
+                        fb.mesh.dispose(); fb.light.dispose();
+                        fireballs.splice(i, 1);
+                    }
+                }
+
+                // --- Update enemies ---
+                const now = Date.now();
+                for (const en of enemies) {
+                    if (en.hp <= 0) continue;
+                    const toPlayer = characterRoot.position.subtract(en.root.position);
+                    toPlayer.y = 0;
+                    const dist = toPlayer.length();
+
+                    if (dist > ENEMY_MELEE_RANGE) {
+                        const step = toPlayer.normalize().scaleInPlace(ENEMY_SPEED);
+                        en.root.position.addInPlace(step);
+                        en.root.rotation.y = Math.atan2(step.x, step.z);
+                    } else if (now - en.lastMelee > ENEMY_MELEE_INTERVAL) {
+                        en.lastMelee = now;
+                        damagePlayer(ENEMY_MELEE_DAMAGE);
+                    }
                 }
 
                 // Camera locked to player, no smoothing
