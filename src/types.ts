@@ -26,13 +26,15 @@ export interface Fireball {
     burnDamage: number;
 }
 
-export type SpellElement = 'fire' | 'ice' | 'lightning';
-export type SpellPower   = 'low'  | 'medium' | 'high';
+export type SpellElement  = 'fire' | 'ice' | 'lightning';
+export type SpellPower    = 'low'  | 'medium' | 'high';
 export type SpellCastTime = 'instant' | 'short' | 'long';
+export type SpellCooldown = 'none' | 'short' | 'long';
 
 export interface Spell {
     element:  SpellElement;
     power:    SpellPower;
     castTime: SpellCastTime;
+    cooldown: SpellCooldown;
     manaCost: number;
 }
