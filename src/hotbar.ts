@@ -1,4 +1,3 @@
-import { COOLDOWN_DURATION } from './constants';
 import type { Spell, SpellElement } from './types';
 
 const ELEMENT_EMOJI: Record<SpellElement, string> = {
@@ -26,8 +25,8 @@ export class Hotbar {
         this.prevSpells = [null, null, null, null];
     }
 
-    update(spells: (Spell | null)[], lastCast: number[], playerMana: number): void {
-        const now = Date.now();
+    update(spells: (Spell | null)[], lastCast: number[], cooldownMs: number[], playerMana: number, frozenAt?: number): void {
+        const now = frozenAt ?? Date.now();
 
         for (let i = 0; i < 4; i++) {
             const spell  = spells[i];
@@ -56,8 +55,8 @@ export class Hotbar {
                 continue;
             }
 
-            // cooldown
-            const cdDuration  = COOLDOWN_DURATION[spell.cooldown];
+            // cooldown — use the duration locked in at cast time, not the current spell's CD
+            const cdDuration  = cooldownMs[i];
             const remaining   = Math.max(0, cdDuration - (now - lastCast[i]));
             const cdFraction  = cdDuration > 0 ? remaining / cdDuration : 0;
             const onCooldown  = remaining > 0;

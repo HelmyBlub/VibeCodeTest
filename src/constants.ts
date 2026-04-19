@@ -26,16 +26,9 @@ export const FIREBALL_HIT_RADIUS = 1.0;
 export const PLAYER_MAX_MANA = 100;
 export const MANA_REGEN_RATE = 8; // per second
 
-// Spells
-export const CAST_DURATION     = { instant: 0, short: 600, long: 1500 }  as const;
-export const SPELL_DAMAGE      = { low: 15, medium: 25, high: 40 }        as const;
-export const COOLDOWN_DURATION = { none: 0, short: 2000, long: 5000 }     as const;
-export const COOLDOWN_DMG_MULT = { none: 0.7, short: 1.0, long: 1.5 }     as const;
-
 // Fire DoT
 export const FIRE_BURN_DURATION = 3000; // ms total
 export const FIRE_BURN_INTERVAL = 500;  // ms between ticks
-export const FIRE_BURN_DAMAGE   = { low: 3, medium: 5, high: 8 } as const;
 
 // Ice slow
 export const ICE_SLOW_DURATION = 3000; // ms

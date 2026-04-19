@@ -2,9 +2,9 @@ import {
     Color3, Mesh, MeshBuilder, PointLight, Scene, StandardMaterial, Vector3,
 } from '@babylonjs/core';
 import {
-    COOLDOWN_DMG_MULT, ENEMY_MAX_HP, FIRE_BURN_DAMAGE, FIRE_BURN_DURATION, FIREBALL_HIT_RADIUS,
+    ENEMY_MAX_HP, FIRE_BURN_DURATION, FIREBALL_HIT_RADIUS,
     FIREBALL_LIFETIME, FIREBALL_SPEED, ICE_SLOW_DURATION,
-    LIGHTNING_CHAIN_MULT, LIGHTNING_CHAIN_RANGE, SPELL_DAMAGE,
+    LIGHTNING_CHAIN_MULT, LIGHTNING_CHAIN_RANGE,
 } from './constants';
 import type { Enemy, Fireball, Spell, SpellElement } from './types';
 
@@ -51,14 +51,13 @@ export class CombatSystem {
         light.intensity = 1.5;
         light.range     = 6;
 
-        const mult = COOLDOWN_DMG_MULT[spell.cooldown];
         this.projectiles.push({
             mesh, light,
             vel:        direction.scale(FIREBALL_SPEED),
             life:       FIREBALL_LIFETIME,
-            damage:     Math.round(SPELL_DAMAGE[spell.power] * mult),
+            damage:     spell.damage,
             element:    spell.element,
-            burnDamage: Math.round(FIRE_BURN_DAMAGE[spell.power] * mult),
+            burnDamage: spell.burnDamage,
         });
         return true;
     }

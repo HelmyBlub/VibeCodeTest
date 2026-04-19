@@ -1,130 +1,118 @@
-import { COOLDOWN_DMG_MULT, COOLDOWN_DURATION, FIRE_BURN_DAMAGE, SPELL_DAMAGE } from './constants';
-import type { Spell, SpellElement, SpellPower, SpellCastTime, SpellCooldown } from './types';
+import type { Spell, SpellElement } from './types';
 
-const MANA_BASE = 20;
-const POWER_MULT: Record<SpellPower, number>    = { low: 0.7, medium: 1.0, high: 1.6 };
-const CAST_MULT: Record<SpellCastTime, number>  = { instant: 1.5, short: 1.1, long: 0.7 };
+// ── Continuous formulas ──────────────────────────────────────────────────────
 
-export function calcManaCost(power: SpellPower, castTime: SpellCastTime): number {
-    return Math.round(MANA_BASE * POWER_MULT[power] * CAST_MULT[castTime]);
+function cdMult(cooldown: number): number {
+    return 0.7 + (cooldown / 10000) * 0.8; // 0.70 → 1.50
 }
+
+export function calcManaCost(power: number, castTime: number): number {
+    const pf = 0.3 + (power / 100) * 1.2;       // 0.30 → 1.50
+    const cf = 1.5 - (castTime / 3000);           // 1.50 → 0.50
+    return Math.max(1, Math.round(20 * pf * cf));
+}
+
+export function calcDamage(power: number, cooldown: number): number {
+    return Math.max(1, Math.round((10 + power * 0.3) * cdMult(cooldown)));
+}
+
+export function calcBurnDamage(power: number, cooldown: number): number {
+    return Math.max(1, Math.round((3 + power * 0.05) * cdMult(cooldown)));
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 const ELEMENT_DESC: Record<SpellElement, string> = {
     fire:      'Burns enemies over time',
     ice:       'Slows enemy movement',
     lightning: 'Arcs to a nearby secondary target',
 };
-const CAST_DESC: Record<SpellCastTime, string> = {
-    instant: 'Fires instantly',
-    short:   '0.6 s channel',
-    long:    '1.5 s channel',
-};
-const COOLDOWN_DESC: Record<SpellCooldown, string> = {
-    none:  'No cooldown · ×0.7 dmg',
-    short: '2 s cooldown · ×1.0 dmg',
-    long:  '5 s cooldown · ×1.5 dmg',
-};
 
-function calcDamage(power: SpellPower, cooldown: SpellCooldown): number {
-    return Math.round(SPELL_DAMAGE[power] * COOLDOWN_DMG_MULT[cooldown]);
-}
-
-function calcBurnDamage(power: SpellPower, cooldown: SpellCooldown): number {
-    return Math.round(FIRE_BURN_DAMAGE[power] * COOLDOWN_DMG_MULT[cooldown]);
+function fmt1(n: number): string {
+    return (Math.round(n * 10) / 10).toFixed(1);
 }
 
 function spellLabel(s: Spell): string {
-    const cap = (x: string) => x[0].toUpperCase() + x.slice(1);
-    const dmg = calcDamage(s.power, s.cooldown);
-    const cd  = COOLDOWN_DURATION[s.cooldown];
-    return `${cap(s.element)} · ${cap(s.power)} · ${cap(s.castTime)} · ${cd > 0 ? cd / 1000 + 's CD' : 'No CD'} · ${dmg} dmg · ${s.manaCost} mp`;
+    const el = s.element[0].toUpperCase() + s.element.slice(1);
+    const ct = s.castTime === 0 ? 'Instant' : `${fmt1(s.castTime / 1000)}s cast`;
+    const cd = s.cooldown === 0 ? 'No CD'   : `${fmt1(s.cooldown / 1000)}s CD`;
+    return `${el} · Pwr ${s.power} · ${ct} · ${cd} · ${s.damage} dmg · ${s.manaCost} mp`;
 }
 
+// ── SpellCreator ─────────────────────────────────────────────────────────────
+
 export class SpellCreator {
-    private element:  SpellElement  = 'fire';
-    private power:    SpellPower    = 'medium';
-    private castTime: SpellCastTime = 'instant';
-    private cooldown: SpellCooldown = 'short';
+    private element:  SpellElement = 'fire';
+    private power    = 50;    // 1–100
+    private castTime = 0;     // ms, 0–3000
+    private cooldown = 2000;  // ms, 0–10000
+
     readonly slots: (Spell | null)[] = [null, null, null, null];
     private readonly overlay: HTMLElement;
     private isOpen = false;
 
+    // DOM refs
+    private previewEl!:   HTMLElement;
+    private slotListEl!:  HTMLElement;
+    private elementBtns!: HTMLElement[];
+
     constructor() {
         this.overlay = document.getElementById('spell-creator')!;
-        this.slots[0] = {
-            element: 'fire', power: 'medium', castTime: 'instant', cooldown: 'short',
-            manaCost: calcManaCost('medium', 'instant'),
-        };
-        this.render();
+        this.slots[0] = this.makeSpell();
+        this.buildHTML();
+        this.bindEvents();
     }
 
-    private render(): void {
-        const cost = calcManaCost(this.power, this.castTime);
-        const dmg  = calcDamage(this.power, this.cooldown);
-        const burn = calcBurnDamage(this.power, this.cooldown);
-        const cap  = (x: string) => x[0].toUpperCase() + x.slice(1);
+    private makeSpell(): Spell {
+        return {
+            element:    this.element,
+            power:      this.power,
+            castTime:   this.castTime,
+            cooldown:   this.cooldown,
+            manaCost:   calcManaCost(this.power, this.castTime),
+            damage:     calcDamage(this.power, this.cooldown),
+            burnDamage: calcBurnDamage(this.power, this.cooldown),
+        };
+    }
 
-        const eBtn = (el: SpellElement, label: string) =>
-            `<button class="sc-btn${this.element === el ? ' active' : ''}" data-element="${el}">${label}</button>`;
-        const pBtn = (pw: SpellPower, label: string) =>
-            `<button class="sc-btn${this.power === pw ? ' active' : ''}" data-power="${pw}">${label}</button>`;
-        const cBtn = (ct: SpellCastTime, label: string) =>
-            `<button class="sc-btn${this.castTime === ct ? ' active' : ''}" data-cast="${ct}">${label}</button>`;
-        const cdBtn = (cd: SpellCooldown, label: string) =>
-            `<button class="sc-btn${this.cooldown === cd ? ' active' : ''}" data-cooldown="${cd}">${label}</button>`;
-
-        const dmgLine = this.element === 'fire'
-            ? `${dmg} hit dmg &nbsp;+&nbsp; ${burn}/tick DoT`
-            : `${dmg} dmg`;
-
-        const slotRows = this.slots
-            .map((s, i) => `<div class="sc-slot-row"><span class="sc-slot-num">${i + 1}</span>${s ? spellLabel(s) : '<em>Empty</em>'}</div>`)
-            .join('');
-
+    private buildHTML(): void {
         this.overlay.innerHTML = `<div class="sc-panel">
   <h2 class="sc-title">SPELL CREATOR</h2>
 
   <div class="sc-section">
     <div class="sc-label">ELEMENT</div>
-    <div class="sc-row">
-      ${eBtn('fire', '🔥 Fire')}
-      ${eBtn('ice', '❄ Ice')}
-      ${eBtn('lightning', '⚡ Lightning')}
+    <div class="sc-row" id="sc-element-btns">
+      <button class="sc-btn${this.element === 'fire'      ? ' active' : ''}" data-element="fire">🔥 Fire</button>
+      <button class="sc-btn${this.element === 'ice'       ? ' active' : ''}" data-element="ice">❄ Ice</button>
+      <button class="sc-btn${this.element === 'lightning' ? ' active' : ''}" data-element="lightning">⚡ Lightning</button>
     </div>
   </div>
 
   <div class="sc-section">
-    <div class="sc-label">POWER</div>
-    <div class="sc-row">
-      ${pBtn('low', 'Low')}
-      ${pBtn('medium', 'Medium')}
-      ${pBtn('high', 'High')}
+    <div class="sc-label">POWER <span class="sc-range-hint">1 – 100</span></div>
+    <div class="sc-slider-row">
+      <input type="range"  class="sc-slider" id="sc-power-slider" min="1"    max="100"   step="1"   value="${this.power}">
+      <input type="number" class="sc-number" id="sc-power-input"  min="1"    max="100"   step="any" value="${this.power}">
     </div>
   </div>
 
   <div class="sc-section">
-    <div class="sc-label">CAST TIME</div>
-    <div class="sc-row">
-      ${cBtn('instant', 'Instant')}
-      ${cBtn('short', 'Short')}
-      ${cBtn('long', 'Long')}
+    <div class="sc-label">CAST TIME <span class="sc-range-hint">0 – 3 s</span></div>
+    <div class="sc-slider-row">
+      <input type="range"  class="sc-slider" id="sc-cast-slider" min="0" max="3000"  step="50"  value="${this.castTime}">
+      <input type="number" class="sc-number" id="sc-cast-input"  min="0" max="3"     step="any" value="${fmt1(this.castTime / 1000)}">
     </div>
   </div>
 
   <div class="sc-section">
-    <div class="sc-label">COOLDOWN</div>
-    <div class="sc-row">
-      ${cdBtn('none', 'None')}
-      ${cdBtn('short', '2 s')}
-      ${cdBtn('long', '5 s')}
+    <div class="sc-label">COOLDOWN <span class="sc-range-hint">0 – 10 s</span></div>
+    <div class="sc-slider-row">
+      <input type="range"  class="sc-slider" id="sc-cd-slider" min="0" max="10000" step="100" value="${this.cooldown}">
+      <input type="number" class="sc-number" id="sc-cd-input"  min="0" max="10"    step="any" value="${fmt1(this.cooldown / 1000)}">
     </div>
-    <div class="sc-cd-hint">${COOLDOWN_DESC[this.cooldown]}</div>
   </div>
 
-  <div class="sc-preview">
-    <div class="sc-cost">Mana: <strong>${cost}</strong> &nbsp;·&nbsp; Damage: <strong>${dmgLine}</strong></div>
-    <div class="sc-desc">${cap(this.power)} power · ${CAST_DESC[this.castTime]} · ${ELEMENT_DESC[this.element]}</div>
-  </div>
+  <div class="sc-preview" id="sc-preview"></div>
 
   <div class="sc-section">
     <div class="sc-label">SAVE TO SLOT</div>
@@ -136,33 +124,106 @@ export class SpellCreator {
     </div>
   </div>
 
-  <div class="sc-slots">
-    <div class="sc-label">YOUR SPELLS</div>
-    ${slotRows}
-  </div>
+  <div id="sc-slot-list" class="sc-slots"></div>
 
   <div class="sc-footer">Tab — close &nbsp;·&nbsp; 1–4 — cast in combat</div>
 </div>`;
 
-        this.overlay.onclick = (e) => {
+        this.previewEl   = this.overlay.querySelector<HTMLElement>('#sc-preview')!;
+        this.slotListEl  = this.overlay.querySelector<HTMLElement>('#sc-slot-list')!;
+        this.elementBtns = [...this.overlay.querySelectorAll<HTMLElement>('[data-element]')];
+
+        this.updatePreview();
+        this.updateSlotList();
+    }
+
+    private bindEvents(): void {
+        const get = (id: string) => this.overlay.querySelector<HTMLInputElement>(`#${id}`)!;
+
+        const powerSlider = get('sc-power-slider');
+        const powerInput  = get('sc-power-input');
+        const castSlider  = get('sc-cast-slider');
+        const castInput   = get('sc-cast-input');
+        const cdSlider    = get('sc-cd-slider');
+        const cdInput     = get('sc-cd-input');
+
+        // Element buttons + slot saves
+        this.overlay.addEventListener('click', e => {
             const t = e.target as HTMLElement;
-            if (t.dataset['element']) {
-                this.element = t.dataset['element'] as SpellElement; this.render();
-            } else if (t.dataset['power']) {
-                this.power = t.dataset['power'] as SpellPower; this.render();
-            } else if (t.dataset['cast']) {
-                this.castTime = t.dataset['cast'] as SpellCastTime; this.render();
-            } else if (t.dataset['cooldown']) {
-                this.cooldown = t.dataset['cooldown'] as SpellCooldown; this.render();
-            } else if (t.classList.contains('sc-slot-save') && t.dataset['slot'] !== undefined) {
-                this.slots[Number(t.dataset['slot'])] = {
-                    element: this.element, power: this.power,
-                    castTime: this.castTime, cooldown: this.cooldown,
-                    manaCost: calcManaCost(this.power, this.castTime),
-                };
-                this.render();
+            const el = t.dataset['element'] as SpellElement | undefined;
+            if (el) {
+                this.element = el;
+                this.elementBtns.forEach(b => b.classList.toggle('active', b.dataset['element'] === el));
+                this.updatePreview();
+                return;
             }
-        };
+            if (t.classList.contains('sc-slot-save') && t.dataset['slot'] !== undefined) {
+                this.slots[Number(t.dataset['slot'])] = this.makeSpell();
+                this.updateSlotList();
+            }
+        });
+
+        // Power (integer)
+        powerSlider.addEventListener('input', () => {
+            this.power = Math.round(Number(powerSlider.value));
+            powerInput.value = String(this.power);
+            this.updatePreview();
+        });
+        powerInput.addEventListener('input', () => {
+            this.power = Math.min(100, Math.max(1, Math.round(Number(powerInput.value) || 1)));
+            powerSlider.value = String(this.power);
+            this.updatePreview();
+        });
+        powerInput.addEventListener('blur', () => { powerInput.value = String(this.power); });
+
+        // Cast time (slider = ms, input = seconds, 1 decimal)
+        castSlider.addEventListener('input', () => {
+            this.castTime = Number(castSlider.value);
+            castInput.value = fmt1(this.castTime / 1000);
+            this.updatePreview();
+        });
+        castInput.addEventListener('input', () => {
+            const secs = Math.min(3, Math.max(0, Number(castInput.value) || 0));
+            this.castTime = Math.round(secs * 1000);
+            castSlider.value = String(this.castTime);
+            this.updatePreview();
+        });
+        castInput.addEventListener('blur', () => { castInput.value = fmt1(this.castTime / 1000); });
+
+        // Cooldown (slider = ms, input = seconds, 1 decimal)
+        cdSlider.addEventListener('input', () => {
+            this.cooldown = Number(cdSlider.value);
+            cdInput.value = fmt1(this.cooldown / 1000);
+            this.updatePreview();
+        });
+        cdInput.addEventListener('input', () => {
+            const secs = Math.min(10, Math.max(0, Number(cdInput.value) || 0));
+            this.cooldown = Math.round(secs * 1000);
+            cdSlider.value = String(this.cooldown);
+            this.updatePreview();
+        });
+        cdInput.addEventListener('blur', () => { cdInput.value = fmt1(this.cooldown / 1000); });
+    }
+
+    private updatePreview(): void {
+        const cost    = calcManaCost(this.power, this.castTime);
+        const dmg     = calcDamage(this.power, this.cooldown);
+        const burn    = calcBurnDamage(this.power, this.cooldown);
+        const ctLabel = this.castTime === 0 ? 'Fires instantly' : `${fmt1(this.castTime / 1000)} s channel`;
+        const cdLabel = this.cooldown === 0 ? 'No cooldown'     : `${fmt1(this.cooldown / 1000)} s cooldown`;
+        const dmgLine = this.element === 'fire' ? `${dmg} hit &nbsp;+&nbsp; ${burn}/tick DoT` : `${dmg}`;
+
+        this.previewEl.innerHTML = `
+<div class="sc-cost">Mana: <strong>${cost}</strong> &nbsp;·&nbsp; Damage: <strong>${dmgLine}</strong></div>
+<div class="sc-desc">${ctLabel} · ${cdLabel} · ${ELEMENT_DESC[this.element]}</div>`;
+    }
+
+    private updateSlotList(): void {
+        this.slotListEl.innerHTML =
+            '<div class="sc-label">YOUR SPELLS</div>' +
+            this.slots.map((s, i) =>
+                `<div class="sc-slot-row"><span class="sc-slot-num">${i + 1}</span>${s ? spellLabel(s) : '<em>Empty</em>'}</div>`
+            ).join('');
     }
 
     open():   void { this.isOpen = true;  this.overlay.style.display = 'flex'; }

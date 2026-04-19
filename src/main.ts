@@ -8,7 +8,7 @@ import { CombatSystem } from './combat';
 import { HUD } from './hud';
 import { SpellCreator } from './spellcreator';
 import { Hotbar } from './hotbar';
-import { CAST_DURATION, COOLDOWN_DURATION, MANA_REGEN_RATE } from './constants';
+import { MANA_REGEN_RATE } from './constants';
 import type { Spell } from './types';
 
 const canvas = document.getElementById('renderCanvas') as HTMLCanvasElement;
@@ -43,7 +43,9 @@ interface CastState {
 }
 let casting: CastState | null = null;
 
-const slotLastCast = [0, 0, 0, 0];
+const slotLastCast   = [0, 0, 0, 0]; // timestamp of last cast per slot
+const slotCooldownMs = [0, 0, 0, 0]; // cooldown duration locked in at cast time
+let creatorOpenedAt  = 0;            // for freezing cooldowns while creator is open
 
 const INTERRUPT_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
 
@@ -59,13 +61,23 @@ function fireSpell(spell: Spell, slotIndex: number): void {
     dir.y = 0;
     if (dir.length() < 0.01) return;
     combat.castSpell(player.position.add(new Vector3(0, 1.2, 0)), dir.normalize(), spell);
-    slotLastCast[slotIndex] = Date.now();
+    slotLastCast[slotIndex]   = Date.now();
+    slotCooldownMs[slotIndex] = spell.cooldown; // lock in the CD duration used
 }
 
 window.addEventListener('keydown', e => {
     if (e.key === 'Tab') {
         e.preventDefault();
         cancelCast();
+        if (!spellCreator.visible) {
+            creatorOpenedAt = Date.now();
+        } else {
+            // shift lastCast forward by time spent in creator so CDs don't tick
+            const paused = Date.now() - creatorOpenedAt;
+            for (let i = 0; i < 4; i++) {
+                if (slotLastCast[i] > 0) slotLastCast[i] += paused;
+            }
+        }
         spellCreator.toggle();
         return;
     }
@@ -84,12 +96,12 @@ window.addEventListener('keydown', e => {
     const spell = spellCreator.getSlot(slotIndex);
     if (!spell) return;
 
-    // cooldown check
-    if (Date.now() - slotLastCast[slotIndex] < COOLDOWN_DURATION[spell.cooldown]) return;
+    // cooldown check uses the duration locked in at cast time (not the new spell's CD)
+    if (Date.now() - slotLastCast[slotIndex] < slotCooldownMs[slotIndex]) return;
 
     if (!player.spendMana(spell.manaCost)) return;
 
-    const duration = CAST_DURATION[spell.castTime];
+    const duration = spell.castTime;
     if (duration === 0) {
         fireSpell(spell, slotIndex);
     } else {
@@ -109,7 +121,9 @@ scene.onBeforeRenderObservable.add(() => {
     const forward = camToChar.normalize();
     const right   = Vector3.Cross(Vector3.Up(), forward).normalize();
 
-    hotbar.update(spellCreator.slots, slotLastCast, player.mana);
+    // always update hotbar; pass creatorOpenedAt when paused so the timer freezes visually
+    hotbar.update(spellCreator.slots, slotLastCast, slotCooldownMs, player.mana,
+        spellCreator.visible ? creatorOpenedAt : undefined);
 
     if (spellCreator.visible) return;
 
