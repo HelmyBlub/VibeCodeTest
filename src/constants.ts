@@ -41,6 +41,6 @@ export const FIRE_BURN_DAMAGE   = { low: 3, medium: 5, high: 8 } as const;
 export const ICE_SLOW_DURATION = 3000; // ms
 export const ICE_SLOW_FACTOR   = 0.3;  // multiplied against base speed
 
-// Lightning knockback
-export const LIGHTNING_KNOCKBACK       = 0.45; // initial velocity
-export const LIGHTNING_KNOCKBACK_DECAY = 0.75; // multiplier per frame
+// Lightning chain
+export const LIGHTNING_CHAIN_RANGE = 8;   // units from primary target
+export const LIGHTNING_CHAIN_MULT  = 0.6; // secondary damage fraction

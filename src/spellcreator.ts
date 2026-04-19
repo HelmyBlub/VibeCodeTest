@@ -12,7 +12,7 @@ export function calcManaCost(power: SpellPower, castTime: SpellCastTime): number
 const ELEMENT_DESC: Record<SpellElement, string> = {
     fire:      'Burns enemies over time',
     ice:       'Slows enemy movement',
-    lightning: 'Instant burst + knockback',
+    lightning: 'Arcs to a nearby secondary target',
 };
 const CAST_DESC: Record<SpellCastTime, string> = {
     instant: 'Fires instantly',

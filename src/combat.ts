@@ -1,9 +1,10 @@
 import {
-    Color3, MeshBuilder, PointLight, Scene, StandardMaterial, Vector3,
+    Color3, Mesh, MeshBuilder, PointLight, Scene, StandardMaterial, Vector3,
 } from '@babylonjs/core';
 import {
     COOLDOWN_DMG_MULT, ENEMY_MAX_HP, FIRE_BURN_DAMAGE, FIRE_BURN_DURATION, FIREBALL_HIT_RADIUS,
-    FIREBALL_LIFETIME, FIREBALL_SPEED, ICE_SLOW_DURATION, LIGHTNING_KNOCKBACK, SPELL_DAMAGE,
+    FIREBALL_LIFETIME, FIREBALL_SPEED, ICE_SLOW_DURATION,
+    LIGHTNING_CHAIN_MULT, LIGHTNING_CHAIN_RANGE, SPELL_DAMAGE,
 } from './constants';
 import type { Enemy, Fireball, Spell, SpellElement } from './types';
 
@@ -13,9 +14,13 @@ const ELEMENT_COLOR: Record<SpellElement, [Color3, Color3]> = {
     lightning: [new Color3(1, 0.85, 0.1), new Color3(1, 0.9, 0.2)],
 };
 
+interface ChainFlash { mesh: Mesh; light: PointLight; life: number; }
+
 export class CombatSystem {
     private readonly projectiles: Fireball[] = [];
+    private readonly flashes:     ChainFlash[] = [];
     private readonly mats: Record<SpellElement, StandardMaterial>;
+    private readonly flashMat: StandardMaterial;
 
     constructor(private readonly scene: Scene) {
         this.mats = {
@@ -23,6 +28,9 @@ export class CombatSystem {
             ice:       this.makeMat('matIce',       ELEMENT_COLOR.ice),
             lightning: this.makeMat('matLightning', ELEMENT_COLOR.lightning),
         };
+        this.flashMat = new StandardMaterial('chainFlashMat', scene);
+        this.flashMat.emissiveColor = new Color3(1, 1, 0.3);
+        this.flashMat.diffuseColor  = new Color3(1, 0.9, 0.1);
     }
 
     private makeMat(id: string, [diffuse, emissive]: [Color3, Color3]): StandardMaterial {
@@ -55,8 +63,32 @@ export class CombatSystem {
         return true;
     }
 
+    private spawnChainFlash(pos: Vector3): void {
+        const mesh = MeshBuilder.CreateSphere('chainFlash', { diameter: 0.55, segments: 4 }, this.scene);
+        mesh.position = pos.clone();
+        mesh.material = this.flashMat;
+
+        const light = new PointLight('chainLight', pos.clone(), this.scene);
+        light.diffuse   = new Color3(1, 1, 0.3);
+        light.intensity = 2.5;
+        light.range     = 7;
+
+        this.flashes.push({ mesh, light, life: 10 });
+    }
+
     update(enemies: Enemy[], onKill: (en: Enemy) => void): void {
         const now = Date.now();
+
+        // tick chain flashes
+        for (let i = this.flashes.length - 1; i >= 0; i--) {
+            const f = this.flashes[i];
+            f.life--;
+            if (f.life <= 0) {
+                f.mesh.dispose();
+                f.light.dispose();
+                this.flashes.splice(i, 1);
+            }
+        }
 
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
             const p = this.projectiles[i];
@@ -72,7 +104,6 @@ export class CombatSystem {
                     en.hp -= p.damage;
                     en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
 
-                    // elemental effects
                     switch (p.element) {
                         case 'fire':
                             en.burnEnd      = now + FIRE_BURN_DURATION;
@@ -83,9 +114,21 @@ export class CombatSystem {
                             en.slowEnd = now + ICE_SLOW_DURATION;
                             break;
                         case 'lightning': {
-                            const dir = p.vel.clone().normalize();
-                            en.knockback.x = dir.x * LIGHTNING_KNOCKBACK;
-                            en.knockback.z = dir.z * LIGHTNING_KNOCKBACK;
+                            // arc to nearest enemy within range
+                            let nearest: Enemy | null = null;
+                            let nearestDist = LIGHTNING_CHAIN_RANGE;
+                            for (const other of enemies) {
+                                if (other === en || other.hp <= 0) continue;
+                                const d = Vector3.Distance(en.root.position, other.root.position);
+                                if (d < nearestDist) { nearestDist = d; nearest = other; }
+                            }
+                            if (nearest) {
+                                const chainDmg = Math.round(p.damage * LIGHTNING_CHAIN_MULT);
+                                nearest.hp -= chainDmg;
+                                nearest.hpBar.scaling.x = Math.max(0, nearest.hp / ENEMY_MAX_HP);
+                                if (nearest.hp <= 0) onKill(nearest);
+                                this.spawnChainFlash(nearest.root.position.add(new Vector3(0, 2.5, 0)));
+                            }
                             break;
                         }
                     }

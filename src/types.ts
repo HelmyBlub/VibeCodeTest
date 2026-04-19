@@ -13,7 +13,6 @@ export interface Enemy {
     burnDamage:   number;
     lastBurnTick: number;
     slowEnd:      number;
-    knockback:    Vector3;
 }
 
 export interface Fireball {
