@@ -2,8 +2,8 @@ import {
     Color3, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3,
 } from '@babylonjs/core';
 import {
-    ENEMY_MAX_HP, ENEMY_MELEE_DAMAGE, ENEMY_MELEE_INTERVAL,
-    ENEMY_MELEE_RANGE, ENEMY_SPEED,
+    ENEMY_MAX_HP, ENEMY_MELEE_DAMAGE, ENEMY_MELEE_INTERVAL, ENEMY_MELEE_RANGE, ENEMY_SPEED,
+    FIRE_BURN_INTERVAL, ICE_SLOW_FACTOR, LIGHTNING_KNOCKBACK_DECAY,
 } from './constants';
 import type { Enemy } from './types';
 
@@ -52,7 +52,13 @@ export class EnemyManager {
         hpBar.material = this.hpBarMat;
         hpBar.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
-        this.enemies.push({ root, eb, eh, hpBg, hpBar, hp: ENEMY_MAX_HP, lastMelee: 0 });
+        this.enemies.push({
+            root, eb, eh, hpBg, hpBar,
+            hp: ENEMY_MAX_HP, lastMelee: 0,
+            burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
+            slowEnd: 0,
+            knockback: Vector3.Zero(),
+        });
     }
 
     kill(en: Enemy): void {
@@ -64,12 +70,32 @@ export class EnemyManager {
         const now = Date.now();
         for (const en of this.enemies) {
             if (en.hp <= 0) continue;
+
+            // fire: damage over time
+            if (now < en.burnEnd && now - en.lastBurnTick >= FIRE_BURN_INTERVAL) {
+                en.lastBurnTick = now;
+                en.hp -= en.burnDamage;
+                en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
+                if (en.hp <= 0) { this.kill(en); continue; }
+            }
+
+            // lightning: apply and decay knockback
+            if (en.knockback.x !== 0 || en.knockback.z !== 0) {
+                en.root.position.x += en.knockback.x;
+                en.root.position.z += en.knockback.z;
+                en.knockback.scaleInPlace(LIGHTNING_KNOCKBACK_DECAY);
+                if (Math.abs(en.knockback.x) < 0.001) en.knockback.x = 0;
+                if (Math.abs(en.knockback.z) < 0.001) en.knockback.z = 0;
+            }
+
+            // movement toward player (slowed if iced)
             const toPlayer = playerPos.subtract(en.root.position);
             toPlayer.y = 0;
             const dist = toPlayer.length();
+            const speed = now < en.slowEnd ? ENEMY_SPEED * ICE_SLOW_FACTOR : ENEMY_SPEED;
 
             if (dist > ENEMY_MELEE_RANGE) {
-                const step = toPlayer.normalize().scaleInPlace(ENEMY_SPEED);
+                const step = toPlayer.normalize().scaleInPlace(speed);
                 en.root.position.addInPlace(step);
                 en.root.rotation.y = Math.atan2(step.x, step.z);
             } else if (now - en.lastMelee > ENEMY_MELEE_INTERVAL) {

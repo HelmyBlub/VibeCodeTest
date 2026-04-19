@@ -1,16 +1,19 @@
 import {
     Color3, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3,
 } from '@babylonjs/core';
-import { BOUNDARY, GRAVITY, JUMP_FORCE, MOVE_SPEED, PLAYER_MAX_HP } from './constants';
+import { BOUNDARY, GRAVITY, JUMP_FORCE, MOVE_SPEED, PLAYER_MAX_HP, PLAYER_MAX_MANA } from './constants';
 import { HUD } from './hud';
 
 export class Player {
     readonly root: TransformNode;
-    hp = PLAYER_MAX_HP;
+    hp   = PLAYER_MAX_HP;
+    mana = PLAYER_MAX_MANA;
     alive = true;
 
     private velocityY = 0;
-    private onGround = true;
+    private velX = 0;
+    private velZ = 0;
+    onGround = true;
 
     constructor(scene: Scene, private readonly hud: HUD) {
         this.root = new TransformNode('player', scene);
@@ -45,6 +48,18 @@ export class Player {
         }
     }
 
+    spendMana(amount: number): boolean {
+        if (this.mana < amount) return false;
+        this.mana -= amount;
+        this.hud.updateMana(this.mana);
+        return true;
+    }
+
+    regenMana(amount: number): void {
+        this.mana = Math.min(PLAYER_MAX_MANA, this.mana + amount);
+        this.hud.updateMana(this.mana);
+    }
+
     update(keys: Record<string, boolean>, forward: Vector3, right: Vector3): void {
         if (this.alive) {
             const move = Vector3.Zero();
@@ -53,13 +68,25 @@ export class Player {
             if (keys['a'] || keys['arrowleft'])  move.subtractInPlace(right);
             if (keys['d'] || keys['arrowright']) move.addInPlace(right);
 
-            if (move.length() > 0.01) {
+            const hasInput = move.length() > 0.01;
+
+            if (hasInput) {
                 move.normalize().scaleInPlace(MOVE_SPEED);
-                const next = this.root.position.add(move);
-                next.x = Math.max(-BOUNDARY, Math.min(BOUNDARY, next.x));
-                next.z = Math.max(-BOUNDARY, Math.min(BOUNDARY, next.z));
-                this.root.position.copyFrom(next);
-                this.root.rotation.y = Math.atan2(move.x, move.z);
+                this.velX = move.x;
+                this.velZ = move.z;
+            } else if (this.onGround) {
+                // stop instantly when on the ground and no keys held
+                this.velX = 0;
+                this.velZ = 0;
+            }
+            // in the air with no input: velX/velZ carry from previous frame
+
+            if (this.velX !== 0 || this.velZ !== 0) {
+                const nx = Math.max(-BOUNDARY, Math.min(BOUNDARY, this.root.position.x + this.velX));
+                const nz = Math.max(-BOUNDARY, Math.min(BOUNDARY, this.root.position.z + this.velZ));
+                this.root.position.x = nx;
+                this.root.position.z = nz;
+                this.root.rotation.y = Math.atan2(this.velX, this.velZ);
             }
 
             if (keys[' '] && this.onGround) {

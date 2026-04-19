@@ -7,11 +7,27 @@
 </head>
 <body>
     <canvas id="renderCanvas"></canvas>
-    <div id="hud">WASD — move &nbsp;|&nbsp; Space — jump &nbsp;|&nbsp; Q — fireball &nbsp;|&nbsp; Left-drag — camera</div>
-    <div id="player-hp">
-        HP: <span id="hp-text">100</span>
-        <div id="hp-track"><div id="hp-fill"></div></div>
+
+    <div id="hud">WASD — move &nbsp;|&nbsp; Space — jump &nbsp;|&nbsp; 1–4 — cast spell &nbsp;|&nbsp; Tab — spell creator &nbsp;|&nbsp; Left-drag — camera</div>
+
+    <div id="player-stats">
+        <div id="player-hp">
+            HP: <span id="hp-text">100</span>
+            <div id="hp-track"><div id="hp-fill"></div></div>
+        </div>
+        <div id="player-mana">
+            Mana: <span id="mana-text">100</span>
+            <div id="mana-track"><div id="mana-fill"></div></div>
+        </div>
     </div>
+
+    <div id="cast-bar">
+        <div id="cast-bar-label"></div>
+        <div id="cast-bar-track"><div id="cast-bar-fill"></div></div>
+    </div>
+
+    <div id="spell-creator"></div>
+
     <div id="game-over"><div>YOU DIED</div><span>Refresh to restart</span></div>
     <script type="module" src="/src/main.ts"></script>
 </body>

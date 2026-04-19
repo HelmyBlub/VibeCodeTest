@@ -19,7 +19,26 @@ export const ENEMY_MELEE_INTERVAL = 1000;
 
 // Combat
 export const FIREBALL_SPEED = 0.45;
-export const FIREBALL_DAMAGE = 25;
 export const FIREBALL_LIFETIME = 110;
-export const FIREBALL_COOLDOWN = 800;
 export const FIREBALL_HIT_RADIUS = 1.0;
+
+// Mana
+export const PLAYER_MAX_MANA = 100;
+export const MANA_REGEN_RATE = 8; // per second
+
+// Spells
+export const CAST_DURATION = { instant: 0, short: 600, long: 1500 } as const;
+export const SPELL_DAMAGE  = { low: 15, medium: 25, high: 40 }      as const;
+
+// Fire DoT
+export const FIRE_BURN_DURATION = 3000; // ms total
+export const FIRE_BURN_INTERVAL = 500;  // ms between ticks
+export const FIRE_BURN_DAMAGE   = { low: 3, medium: 5, high: 8 } as const;
+
+// Ice slow
+export const ICE_SLOW_DURATION = 3000; // ms
+export const ICE_SLOW_FACTOR   = 0.3;  // multiplied against base speed
+
+// Lightning knockback
+export const LIGHTNING_KNOCKBACK       = 0.45; // initial velocity
+export const LIGHTNING_KNOCKBACK_DECAY = 0.75; // multiplier per frame
