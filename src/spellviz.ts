@@ -154,8 +154,15 @@ export class SpellVisualization {
             if (this.shiftHeld) {
                 this.onProjectileEdited?.({ up: -dy * MOVE_SENS });
             } else {
-                // World-space: drag right = +right, drag down = +forward
-                this.onProjectileEdited?.({ right: dx * MOVE_SENS, forward: dy * MOVE_SENS });
+                // Camera-aware using cam.alpha (horizontal orbit angle).
+                // Screen-right in world XZ = (sin α, 0, -cos α)
+                // Screen-down in world XZ = (-cos α, 0, -sin α)  [toward target = into scene]
+                const a = this.cam.alpha;
+                const sinA = Math.sin(a), cosA = Math.cos(a);
+                this.onProjectileEdited?.({
+                    right:   (-sinA * dx + cosA * dy) * MOVE_SENS,
+                    forward: ( cosA * dx + sinA * dy) * MOVE_SENS,
+                });
             }
         } else if (this.editMode === 'rotate') {
             this.onProjectileEdited?.({ yaw: dx * ROTATE_SENS, pitch: -dy * ROTATE_SENS });

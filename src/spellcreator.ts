@@ -1,5 +1,6 @@
 import type { ProjectileConfig, Spell, SpellElement } from './types';
 import { SpellVisualization, type EditMode } from './spellviz';
+import { MANA_COST_FACTOR } from './constants';
 
 // ── Continuous formulas ──────────────────────────────────────────────────────
 
@@ -10,7 +11,7 @@ function cdMult(cooldown: number): number {
 export function calcManaCost(power: number, castTime: number): number {
     const pf = 0.3 + (power / 100) * 1.2;
     const cf = 1.5 - (castTime / 3000);
-    return Math.max(1, Math.round(20 * pf * cf));
+    return Math.max(1, Math.round(20 * pf * cf * MANA_COST_FACTOR));
 }
 
 export function calcDamage(power: number, cooldown: number): number {

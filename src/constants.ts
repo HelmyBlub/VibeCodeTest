@@ -23,8 +23,9 @@ export const FIREBALL_LIFETIME = 110;
 export const FIREBALL_HIT_RADIUS = 1.0;
 
 // Mana
-export const PLAYER_MAX_MANA = 100;
-export const MANA_REGEN_RATE = 8; // per second
+export const PLAYER_MAX_MANA    = 100;
+export const MANA_REGEN_RATE    = 8;   // per second
+export const MANA_COST_FACTOR   = 0.2; // multiplied against base cost (1.0 = full cost, lower = cheaper)
 
 // Fire DoT
 export const FIRE_BURN_DURATION = 3000; // ms total
