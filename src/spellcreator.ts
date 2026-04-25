@@ -1,5 +1,5 @@
 import type { ProjectileConfig, Spell, SpellElement } from './types';
-import { SpellVisualization } from './spellviz';
+import { SpellVisualization, type EditMode } from './spellviz';
 
 // ── Continuous formulas ──────────────────────────────────────────────────────
 
@@ -88,6 +88,7 @@ export class SpellCreator {
 
     // DOM refs
     private previewEl!:       HTMLElement;
+    private vizHintEl!:       HTMLElement;
     private slotListEl!:      HTMLElement;
     private projTabsEl!:      HTMLElement;
     private projElementBtns!: HTMLElement[];
@@ -129,11 +130,13 @@ export class SpellCreator {
         const tabs = this.projStates.map((p, i) =>
             `<button class="sc-btn sc-proj-tab${i === this.selectedProjIdx ? ' active' : ''}" data-proj="${i}">${ELEMENT_EMOJI[p.element]} #${i + 1}</button>`
         ).join('');
-        const addBtn = this.projStates.length < MAX_PROJECTILES
+        const addBtn    = this.projStates.length < MAX_PROJECTILES
             ? `<button class="sc-btn sc-proj-add">+ Add</button>` : '';
+        const copyBtn   = this.projStates.length < MAX_PROJECTILES
+            ? `<button class="sc-btn sc-proj-copy">⊕ Copy</button>` : '';
         const removeBtn = this.projStates.length > 1
             ? `<button class="sc-btn sc-proj-remove">× Remove</button>` : '';
-        return tabs + addBtn + removeBtn;
+        return tabs + addBtn + copyBtn + removeBtn;
     }
 
     private buildHTML(): void {
@@ -228,7 +231,7 @@ export class SpellCreator {
 
   <div class="sc-viz-side">
     <canvas id="sc-viz-canvas" class="sc-viz-canvas" width="${VIZ_W}" height="${VIZ_H}"></canvas>
-    <div class="sc-viz-hint">Drag to orbit &nbsp;·&nbsp; Click a projectile to select it</div>
+    <div class="sc-viz-hint">Drag to orbit · Click to select · Hold G: move · Hold R: rotate direction</div>
   </div>
 </div>`;
 
@@ -251,14 +254,38 @@ export class SpellCreator {
         this.pitchSlider     = get('sc-pitch-slider');
         this.pitchInput      = get('sc-pitch-input');
 
+        this.vizHintEl = this.overlay.querySelector<HTMLElement>('.sc-viz-hint')!;
+
         // Visualization
         const vizCanvas = this.overlay.querySelector<HTMLCanvasElement>('#sc-viz-canvas')!;
         this.viz = new SpellVisualization(vizCanvas);
+
         this.viz.onProjectileSelected = (idx) => {
             this.selectedProjIdx = idx;
             this.renderProjTabs();
             this.loadProjToEditor();
             this.syncViz();
+        };
+
+        this.viz.onProjectileEdited = (edits) => {
+            const p = this.projStates[this.selectedProjIdx];
+            if (edits.right   !== undefined) p.right   = Math.min(3,   Math.max(-3,  p.right   + edits.right));
+            if (edits.up      !== undefined) p.up      = Math.min(4,   Math.max(-1,  p.up      + edits.up));
+            if (edits.forward !== undefined) p.forward = Math.min(3,   Math.max(-3,  p.forward + edits.forward));
+            if (edits.yaw     !== undefined) p.yaw     = Math.min(180, Math.max(-180, p.yaw    + edits.yaw));
+            if (edits.pitch   !== undefined) p.pitch   = Math.min(90,  Math.max(-90,  p.pitch  + edits.pitch));
+            this.loadProjToEditor();
+            this.syncViz();
+        };
+
+        this.viz.onEditModeChanged = (mode: EditMode) => {
+            if (mode === 'none') {
+                this.vizHintEl.textContent = 'Drag to orbit · Click to select · Hold G: move · Hold R: rotate direction';
+            } else if (mode === 'move') {
+                this.vizHintEl.textContent = '⬢ MOVE — left/right: R offset · up/down: F offset · Shift: U offset';
+            } else {
+                this.vizHintEl.textContent = '↻ ROTATE — left/right: yaw  ·  up/down: pitch';
+            }
         };
 
         this.updatePreview();
@@ -319,6 +346,16 @@ export class SpellCreator {
             if (t.classList.contains('sc-proj-add')) {
                 if (this.projStates.length >= MAX_PROJECTILES) return;
                 this.projStates.push(defaultProjState());
+                this.selectedProjIdx = this.projStates.length - 1;
+                this.renderProjTabs();
+                this.loadProjToEditor();
+                this.updatePreview();
+                return;
+            }
+
+            if (t.classList.contains('sc-proj-copy')) {
+                if (this.projStates.length >= MAX_PROJECTILES) return;
+                this.projStates.push({ ...this.projStates[this.selectedProjIdx] });
                 this.selectedProjIdx = this.projStates.length - 1;
                 this.renderProjTabs();
                 this.loadProjToEditor();
