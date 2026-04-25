@@ -221,11 +221,18 @@ body { overflow: hidden; background: #000; }
     display: none;
     position: absolute;
     inset: 0;
-    background: rgba(0,0,0,0.65);
+    background: rgba(0,0,0,0.72);
     align-items: center;
     justify-content: center;
     z-index: 10;
     font-family: sans-serif;
+}
+
+.sc-layout {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+    max-height: 94vh;
 }
 
 .sc-panel {
@@ -235,6 +242,32 @@ body { overflow: hidden; background: #000; }
     padding: 28px 32px;
     min-width: 420px;
     color: white;
+    max-height: 94vh;
+    overflow-y: auto;
+}
+
+/* ── Spell viz side ── */
+
+.sc-viz-side {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.sc-viz-canvas {
+    display: block;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.12);
+    cursor: grab;
+    background: #080810;
+}
+.sc-viz-canvas:active { cursor: grabbing; }
+
+.sc-viz-hint {
+    font-size: 11px;
+    color: #444;
+    letter-spacing: 1px;
 }
 
 .sc-title {

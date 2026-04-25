@@ -1,4 +1,5 @@
 import type { ProjectileConfig, Spell, SpellElement } from './types';
+import { SpellVisualization } from './spellviz';
 
 // ── Continuous formulas ──────────────────────────────────────────────────────
 
@@ -7,8 +8,8 @@ function cdMult(cooldown: number): number {
 }
 
 export function calcManaCost(power: number, castTime: number): number {
-    const pf = 0.3 + (power / 100) * 1.2;       // 0.30 → 1.50
-    const cf = 1.5 - (castTime / 3000);           // 1.50 → 0.50
+    const pf = 0.3 + (power / 100) * 1.2;
+    const cf = 1.5 - (castTime / 3000);
     return Math.max(1, Math.round(20 * pf * cf));
 }
 
@@ -38,7 +39,6 @@ function fmt1(n: number): string {
     return (Math.round(n * 10) / 10).toFixed(1);
 }
 
-// Internal creator state per projectile (damage/burnDamage baked in makeSpell)
 interface ProjState {
     right:   number;
     up:      number;
@@ -69,12 +69,14 @@ function spellLabel(s: Spell): string {
 }
 
 const MAX_PROJECTILES = 6;
+const VIZ_W = 400;
+const VIZ_H = 460;
 
 // ── SpellCreator ─────────────────────────────────────────────────────────────
 
 export class SpellCreator {
-    private castTime = 0;     // ms, 0–3000
-    private cooldown = 2000;  // ms, 0–10000
+    private castTime = 0;
+    private cooldown = 2000;
 
     private projStates: ProjState[] = [defaultProjState()];
     private selectedProjIdx = 0;
@@ -82,14 +84,13 @@ export class SpellCreator {
     readonly slots: (Spell | null)[] = [null, null, null, null];
     private readonly overlay: HTMLElement;
     private isOpen = false;
+    private viz!: SpellVisualization;
 
     // DOM refs
-    private previewEl!:        HTMLElement;
-    private slotListEl!:       HTMLElement;
-    private projTabsEl!:       HTMLElement;
-    private projElementBtns!:  HTMLElement[];
-
-    // Per-proj editor sliders
+    private previewEl!:       HTMLElement;
+    private slotListEl!:      HTMLElement;
+    private projTabsEl!:      HTMLElement;
+    private projElementBtns!: HTMLElement[];
     private projPowerSlider!: HTMLInputElement;
     private projPowerInput!:  HTMLInputElement;
     private rightSlider!:     HTMLInputElement;
@@ -117,9 +118,9 @@ export class SpellCreator {
             burnDamage: calcBurnDamage(p.power, this.cooldown),
         }));
         return {
-            castTime:    this.castTime,
-            cooldown:    this.cooldown,
-            manaCost:    this.projStates.reduce((s, p) => s + calcManaCost(p.power, this.castTime), 0),
+            castTime:  this.castTime,
+            cooldown:  this.cooldown,
+            manaCost:  this.projStates.reduce((s, p) => s + calcManaCost(p.power, this.castTime), 0),
             projectiles,
         };
     }
@@ -137,91 +138,98 @@ export class SpellCreator {
 
     private buildHTML(): void {
         const p0 = this.projStates[0];
-        this.overlay.innerHTML = `<div class="sc-panel">
-  <h2 class="sc-title">SPELL CREATOR</h2>
+        this.overlay.innerHTML = `
+<div class="sc-layout">
+  <div class="sc-panel">
+    <h2 class="sc-title">SPELL CREATOR</h2>
 
-  <div class="sc-section">
-    <div class="sc-label">CAST TIME <span class="sc-range-hint">0 – 3 s</span></div>
-    <div class="sc-slider-row">
-      <input type="range"  class="sc-slider" id="sc-cast-slider" min="0" max="3000"  step="50"  value="${this.castTime}">
-      <input type="number" class="sc-number" id="sc-cast-input"  min="0" max="3"     step="any" value="${fmt1(this.castTime / 1000)}">
-    </div>
-  </div>
-
-  <div class="sc-section">
-    <div class="sc-label">COOLDOWN <span class="sc-range-hint">0 – 10 s</span></div>
-    <div class="sc-slider-row">
-      <input type="range"  class="sc-slider" id="sc-cd-slider" min="0" max="10000" step="100" value="${this.cooldown}">
-      <input type="number" class="sc-number" id="sc-cd-input"  min="0" max="10"    step="any" value="${fmt1(this.cooldown / 1000)}">
-    </div>
-  </div>
-
-  <div class="sc-section">
-    <div class="sc-label">PROJECTILES <span class="sc-range-hint">max ${MAX_PROJECTILES}</span></div>
-    <div class="sc-row sc-proj-tabs" id="sc-proj-tabs">${this.projTabsHTML()}</div>
-
-    <div class="sc-proj-editor">
-      <div class="sc-label sc-sub-label">ELEMENT</div>
-      <div class="sc-row" id="sc-proj-element-btns">
-        <button class="sc-btn sc-proj-elem${p0.element === 'fire'      ? ' active' : ''}" data-proj-element="fire">🔥 Fire</button>
-        <button class="sc-btn sc-proj-elem${p0.element === 'ice'       ? ' active' : ''}" data-proj-element="ice">❄ Ice</button>
-        <button class="sc-btn sc-proj-elem${p0.element === 'lightning' ? ' active' : ''}" data-proj-element="lightning">⚡ Lightning</button>
-      </div>
-
-      <div class="sc-label sc-sub-label" style="margin-top:10px">POWER <span class="sc-range-hint">1 – 100</span></div>
+    <div class="sc-section">
+      <div class="sc-label">CAST TIME <span class="sc-range-hint">0 – 3 s</span></div>
       <div class="sc-slider-row">
-        <input type="range"  class="sc-slider" id="sc-proj-power-slider" min="1" max="100" step="1" value="${p0.power}">
-        <input type="number" class="sc-number sc-num-narrow" id="sc-proj-power-input" min="1" max="100" step="any" value="${p0.power}">
-      </div>
-
-      <div class="sc-label sc-sub-label" style="margin-top:12px">SPAWN OFFSET <span class="sc-range-hint">units from player  R=right  U=up  F=forward</span></div>
-      <div class="sc-slider-row">
-        <span class="sc-axis">R</span>
-        <input type="range"  class="sc-slider" id="sc-right-slider" min="-3" max="3" step="0.1" value="0">
-        <input type="number" class="sc-number sc-num-narrow" id="sc-right-input" min="-3" max="3" step="any" value="0.0">
-      </div>
-      <div class="sc-slider-row">
-        <span class="sc-axis">U</span>
-        <input type="range"  class="sc-slider" id="sc-up-slider" min="-1" max="4" step="0.1" value="0">
-        <input type="number" class="sc-number sc-num-narrow" id="sc-up-input" min="-1" max="4" step="any" value="0.0">
-      </div>
-      <div class="sc-slider-row">
-        <span class="sc-axis">F</span>
-        <input type="range"  class="sc-slider" id="sc-fwd-slider" min="-3" max="3" step="0.1" value="0">
-        <input type="number" class="sc-number sc-num-narrow" id="sc-fwd-input" min="-3" max="3" step="any" value="0.0">
-      </div>
-
-      <div class="sc-label sc-sub-label" style="margin-top:12px">FLY DIRECTION <span class="sc-range-hint">yaw: left/right from forward · pitch: up/down</span></div>
-      <div class="sc-slider-row">
-        <span class="sc-axis">Yaw</span>
-        <input type="range"  class="sc-slider" id="sc-yaw-slider" min="-180" max="180" step="1" value="0">
-        <input type="number" class="sc-number sc-num-narrow" id="sc-yaw-input" min="-180" max="180" step="any" value="0">
-        <span class="sc-unit">°</span>
-      </div>
-      <div class="sc-slider-row">
-        <span class="sc-axis">Pitch</span>
-        <input type="range"  class="sc-slider" id="sc-pitch-slider" min="-90" max="90" step="1" value="0">
-        <input type="number" class="sc-number sc-num-narrow" id="sc-pitch-input" min="-90" max="90" step="any" value="0">
-        <span class="sc-unit">°</span>
+        <input type="range"  class="sc-slider" id="sc-cast-slider" min="0" max="3000"  step="50"  value="${this.castTime}">
+        <input type="number" class="sc-number" id="sc-cast-input"  min="0" max="3"     step="any" value="${fmt1(this.castTime / 1000)}">
       </div>
     </div>
-  </div>
 
-  <div class="sc-preview" id="sc-preview"></div>
-
-  <div class="sc-section">
-    <div class="sc-label">SAVE TO SLOT</div>
-    <div class="sc-row">
-      <button class="sc-btn sc-slot-save" data-slot="0">1</button>
-      <button class="sc-btn sc-slot-save" data-slot="1">2</button>
-      <button class="sc-btn sc-slot-save" data-slot="2">3</button>
-      <button class="sc-btn sc-slot-save" data-slot="3">4</button>
+    <div class="sc-section">
+      <div class="sc-label">COOLDOWN <span class="sc-range-hint">0 – 10 s</span></div>
+      <div class="sc-slider-row">
+        <input type="range"  class="sc-slider" id="sc-cd-slider" min="0" max="10000" step="100" value="${this.cooldown}">
+        <input type="number" class="sc-number" id="sc-cd-input"  min="0" max="10"    step="any" value="${fmt1(this.cooldown / 1000)}">
+      </div>
     </div>
+
+    <div class="sc-section">
+      <div class="sc-label">PROJECTILES <span class="sc-range-hint">max ${MAX_PROJECTILES} · click in view to select</span></div>
+      <div class="sc-row sc-proj-tabs" id="sc-proj-tabs">${this.projTabsHTML()}</div>
+
+      <div class="sc-proj-editor">
+        <div class="sc-label sc-sub-label">ELEMENT</div>
+        <div class="sc-row" id="sc-proj-element-btns">
+          <button class="sc-btn sc-proj-elem${p0.element === 'fire'      ? ' active' : ''}" data-proj-element="fire">🔥 Fire</button>
+          <button class="sc-btn sc-proj-elem${p0.element === 'ice'       ? ' active' : ''}" data-proj-element="ice">❄ Ice</button>
+          <button class="sc-btn sc-proj-elem${p0.element === 'lightning' ? ' active' : ''}" data-proj-element="lightning">⚡ Lightning</button>
+        </div>
+
+        <div class="sc-label sc-sub-label" style="margin-top:10px">POWER <span class="sc-range-hint">1 – 100</span></div>
+        <div class="sc-slider-row">
+          <input type="range"  class="sc-slider" id="sc-proj-power-slider" min="1" max="100" step="1" value="${p0.power}">
+          <input type="number" class="sc-number sc-num-narrow" id="sc-proj-power-input" min="1" max="100" step="any" value="${p0.power}">
+        </div>
+
+        <div class="sc-label sc-sub-label" style="margin-top:12px">SPAWN OFFSET <span class="sc-range-hint">R=right  U=up  F=forward</span></div>
+        <div class="sc-slider-row">
+          <span class="sc-axis">R</span>
+          <input type="range"  class="sc-slider" id="sc-right-slider" min="-3" max="3" step="0.1" value="0">
+          <input type="number" class="sc-number sc-num-narrow" id="sc-right-input" min="-3" max="3" step="any" value="0.0">
+        </div>
+        <div class="sc-slider-row">
+          <span class="sc-axis">U</span>
+          <input type="range"  class="sc-slider" id="sc-up-slider" min="-1" max="4" step="0.1" value="0">
+          <input type="number" class="sc-number sc-num-narrow" id="sc-up-input" min="-1" max="4" step="any" value="0.0">
+        </div>
+        <div class="sc-slider-row">
+          <span class="sc-axis">F</span>
+          <input type="range"  class="sc-slider" id="sc-fwd-slider" min="-3" max="3" step="0.1" value="0">
+          <input type="number" class="sc-number sc-num-narrow" id="sc-fwd-input" min="-3" max="3" step="any" value="0.0">
+        </div>
+
+        <div class="sc-label sc-sub-label" style="margin-top:12px">FLY DIRECTION <span class="sc-range-hint">yaw: left/right · pitch: up/down</span></div>
+        <div class="sc-slider-row">
+          <span class="sc-axis">Yaw</span>
+          <input type="range"  class="sc-slider" id="sc-yaw-slider" min="-180" max="180" step="1" value="0">
+          <input type="number" class="sc-number sc-num-narrow" id="sc-yaw-input" min="-180" max="180" step="any" value="0">
+          <span class="sc-unit">°</span>
+        </div>
+        <div class="sc-slider-row">
+          <span class="sc-axis">Pitch</span>
+          <input type="range"  class="sc-slider" id="sc-pitch-slider" min="-90" max="90" step="1" value="0">
+          <input type="number" class="sc-number sc-num-narrow" id="sc-pitch-input" min="-90" max="90" step="any" value="0">
+          <span class="sc-unit">°</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sc-preview" id="sc-preview"></div>
+
+    <div class="sc-section">
+      <div class="sc-label">SAVE TO SLOT</div>
+      <div class="sc-row">
+        <button class="sc-btn sc-slot-save" data-slot="0">1</button>
+        <button class="sc-btn sc-slot-save" data-slot="1">2</button>
+        <button class="sc-btn sc-slot-save" data-slot="2">3</button>
+        <button class="sc-btn sc-slot-save" data-slot="3">4</button>
+      </div>
+    </div>
+
+    <div id="sc-slot-list" class="sc-slots"></div>
+    <div class="sc-footer">Tab — close &nbsp;·&nbsp; 1–4 — cast in combat</div>
   </div>
 
-  <div id="sc-slot-list" class="sc-slots"></div>
-
-  <div class="sc-footer">Tab — close &nbsp;·&nbsp; 1–4 — cast in combat</div>
+  <div class="sc-viz-side">
+    <canvas id="sc-viz-canvas" class="sc-viz-canvas" width="${VIZ_W}" height="${VIZ_H}"></canvas>
+    <div class="sc-viz-hint">Drag to orbit &nbsp;·&nbsp; Click a projectile to select it</div>
+  </div>
 </div>`;
 
         this.previewEl       = this.overlay.querySelector<HTMLElement>('#sc-preview')!;
@@ -243,8 +251,22 @@ export class SpellCreator {
         this.pitchSlider     = get('sc-pitch-slider');
         this.pitchInput      = get('sc-pitch-input');
 
+        // Visualization
+        const vizCanvas = this.overlay.querySelector<HTMLCanvasElement>('#sc-viz-canvas')!;
+        this.viz = new SpellVisualization(vizCanvas);
+        this.viz.onProjectileSelected = (idx) => {
+            this.selectedProjIdx = idx;
+            this.renderProjTabs();
+            this.loadProjToEditor();
+            this.syncViz();
+        };
+
         this.updatePreview();
         this.updateSlotList();
+    }
+
+    private syncViz(): void {
+        this.viz.update(this.projStates, this.selectedProjIdx);
     }
 
     private loadProjToEditor(): void {
@@ -277,7 +299,6 @@ export class SpellCreator {
         const cdSlider   = get('sc-cd-slider');
         const cdInput    = get('sc-cd-input');
 
-        // Delegated clicks: slot saves, proj tabs, add/remove, element buttons
         this.overlay.addEventListener('click', e => {
             const t = e.target as HTMLElement;
 
@@ -291,6 +312,7 @@ export class SpellCreator {
                 this.selectedProjIdx = Number(t.dataset['proj']);
                 this.renderProjTabs();
                 this.loadProjToEditor();
+                this.syncViz();
                 return;
             }
 
@@ -317,8 +339,10 @@ export class SpellCreator {
             const projEl = t.dataset['projElement'] as SpellElement | undefined;
             if (projEl) {
                 this.projStates[this.selectedProjIdx].element = projEl;
-                this.projElementBtns.forEach(b => b.classList.toggle('active', b.dataset['projElement'] === projEl));
-                this.renderProjTabs(); // update emoji in tab
+                this.projElementBtns.forEach(b =>
+                    b.classList.toggle('active', b.dataset['projElement'] === projEl)
+                );
+                this.renderProjTabs();
                 this.updatePreview();
                 return;
             }
@@ -352,7 +376,7 @@ export class SpellCreator {
         });
         cdInput.addEventListener('blur', () => { cdInput.value = fmt1(this.cooldown / 1000); });
 
-        // Per-projectile power
+        // Per-proj power
         this.projPowerSlider.addEventListener('input', () => {
             const v = Math.round(Number(this.projPowerSlider.value));
             this.projStates[this.selectedProjIdx].power = v;
@@ -369,10 +393,9 @@ export class SpellCreator {
             this.projPowerInput.value = String(this.projStates[this.selectedProjIdx].power);
         });
 
-        // Per-proj offset and direction sliders
+        // Per-proj offset + direction
         const bindProj = (
-            slider: HTMLInputElement,
-            input: HTMLInputElement,
+            slider: HTMLInputElement, input: HTMLInputElement,
             min: number, max: number, decimals: number,
             prop: keyof ProjState,
         ) => {
@@ -381,11 +404,15 @@ export class SpellCreator {
                 const v = parseFloat(parseFloat(slider.value).toFixed(decimals));
                 (curr() as Record<string, number>)[prop as string] = v;
                 input.value = v.toFixed(decimals);
+                this.syncViz();
             });
             input.addEventListener('input', () => {
-                const v = parseFloat(Math.min(max, Math.max(min, parseFloat(input.value) || 0)).toFixed(decimals));
+                const v = parseFloat(
+                    Math.min(max, Math.max(min, parseFloat(input.value) || 0)).toFixed(decimals)
+                );
                 (curr() as Record<string, number>)[prop as string] = v;
                 slider.value = String(v);
+                this.syncViz();
             });
             input.addEventListener('blur', () => {
                 input.value = ((curr() as Record<string, number>)[prop as string]).toFixed(decimals);
@@ -400,13 +427,13 @@ export class SpellCreator {
     }
 
     private updatePreview(): void {
-        const ctLabel = this.castTime === 0 ? 'Fires instantly' : `${fmt1(this.castTime / 1000)} s channel`;
-        const cdLabel = this.cooldown === 0 ? 'No cooldown'     : `${fmt1(this.cooldown / 1000)} s cooldown`;
+        const ctLabel   = this.castTime === 0 ? 'Fires instantly' : `${fmt1(this.castTime / 1000)} s channel`;
+        const cdLabel   = this.cooldown === 0 ? 'No cooldown'     : `${fmt1(this.cooldown / 1000)} s cooldown`;
         const totalMana = this.projStates.reduce((s, p) => s + calcManaCost(p.power, this.castTime), 0);
 
         const projLines = this.projStates.map((p, i) => {
-            const dmg  = calcDamage(p.power, this.cooldown);
-            const burn = calcBurnDamage(p.power, this.cooldown);
+            const dmg    = calcDamage(p.power, this.cooldown);
+            const burn   = calcBurnDamage(p.power, this.cooldown);
             const dmgStr = p.element === 'fire' ? `${dmg}+${burn}/tick` : `${dmg}`;
             return `<span class="sc-proj-preview-item">${ELEMENT_EMOJI[p.element]} #${i + 1} Pwr ${p.power} · ${dmgStr} · ${ELEMENT_DESC[p.element]}</span>`;
         }).join('');
@@ -415,6 +442,8 @@ export class SpellCreator {
 <div class="sc-cost">Mana: <strong>${totalMana}</strong>${this.projStates.length > 1 ? ` &nbsp;·&nbsp; ${this.projStates.length} projectiles` : ''}</div>
 <div class="sc-proj-preview-list">${projLines}</div>
 <div class="sc-desc">${ctLabel} · ${cdLabel}</div>`;
+
+        this.syncViz();
     }
 
     private updateSlotList(): void {
@@ -425,8 +454,17 @@ export class SpellCreator {
             ).join('');
     }
 
-    open():   void { this.isOpen = true;  this.overlay.style.display = 'flex'; }
-    close():  void { this.isOpen = false; this.overlay.style.display = 'none'; }
+    open(): void {
+        this.isOpen = true;
+        this.overlay.style.display = 'flex';
+        this.viz.start();
+        this.syncViz();
+    }
+    close(): void {
+        this.isOpen = false;
+        this.overlay.style.display = 'none';
+        this.viz.stop();
+    }
     toggle(): void { this.isOpen ? this.close() : this.open(); }
     get visible(): boolean { return this.isOpen; }
     getSlot(i: number): Spell | null { return this.slots[i] ?? null; }
