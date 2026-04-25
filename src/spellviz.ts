@@ -76,7 +76,7 @@ export class SpellVisualization {
         this.scene  = new Scene(this.engine);
         this.scene.clearColor = new Color4(0.04, 0.04, 0.1, 1);
 
-        this.cam = new ArcRotateCamera('vzCam', -Math.PI / 3, 1.05, 9, new Vector3(0, 1, 0), this.scene);
+        this.cam = new ArcRotateCamera('vzCam', Math.PI / 3, 1.05, 9, new Vector3(0, 1, 0), this.scene);
         this.cam.attachControl(canvas, true);
         this.cam.lowerRadiusLimit = 3;
         this.cam.upperRadiusLimit = 22;

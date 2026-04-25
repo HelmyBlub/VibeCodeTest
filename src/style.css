@@ -315,7 +315,20 @@ body { overflow: hidden; background: #000; }
 .sc-btn[data-element="ice"].active       { border-color: #00aaff; color: #44ccff; }
 .sc-btn[data-element="lightning"].active { border-color: #ffcc00; color: #ffdd44; }
 
-.sc-slot-save { width: 44px; text-align: center; font-weight: bold; }
+.sc-slot-tab { min-width: 54px; text-align: center; font-weight: bold; }
+.sc-slot-tab.active { border-color: #7af; color: #9cf; }
+
+.sc-copy-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+.sc-copy-label { font-size: 11px; color: #666; }
+.sc-slot-copy  { font-size: 12px; padding: 3px 8px; }
+
+.sc-editing-tag { font-size: 11px; color: #7af; margin-left: 6px; font-style: normal; }
 
 .sc-range-hint {
     font-size: 10px;

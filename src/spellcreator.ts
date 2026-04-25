@@ -51,22 +51,31 @@ interface ProjState {
 }
 
 function defaultProjState(): ProjState {
-    return { right: 0, up: 0, forward: 0, pitch: 0, yaw: 0, element: 'fire', power: 50 };
+    return { right: 0, up: 0, forward: 0.5, pitch: 0, yaw: 0, element: 'fire', power: 50 };
 }
 
-function spellLabel(s: Spell): string {
-    const ct = s.castTime === 0 ? 'Instant' : `${fmt1(s.castTime / 1000)}s cast`;
-    const cd = s.cooldown === 0 ? 'No CD'   : `${fmt1(s.cooldown / 1000)}s CD`;
+function slotIcons(s: Spell): string {
+    const projs = s.projectiles;
+    const first = projs[0].element;
+    if (projs.every(p => p.element === first)) return ELEMENT_EMOJI[first];
+    return projs.map(p => ELEMENT_EMOJI[p.element]).join('');
+}
+
+function spellLabel(s: Spell, active: boolean): string {
+    const ct   = s.castTime === 0 ? 'Instant' : `${fmt1(s.castTime / 1000)}s cast`;
+    const cd   = s.cooldown === 0 ? 'No CD'   : `${fmt1(s.cooldown / 1000)}s CD`;
+    const tag  = active ? ' <em class="sc-editing-tag">editing</em>' : '';
+    const icons = slotIcons(s);
     if (s.projectiles.length === 1) {
         const p  = s.projectiles[0];
         const el = p.element[0].toUpperCase() + p.element.slice(1);
-        return `${el} · Pwr ${p.power} · ${ct} · ${cd} · ${p.damage} dmg · ${s.manaCost} mp`;
+        return `${icons} ${el} · Pwr ${p.power} · ${ct} · ${cd} · ${p.damage} dmg · ${s.manaCost} mp${tag}`;
     }
     const elements = [...new Set(s.projectiles.map(p => p.element))];
     const elLabel  = elements.length === 1
         ? elements[0][0].toUpperCase() + elements[0].slice(1)
         : 'Mixed';
-    return `${elLabel} · ×${s.projectiles.length} proj · ${ct} · ${cd} · ${s.manaCost} mp`;
+    return `${icons} ${elLabel} · ×${s.projectiles.length} proj · ${ct} · ${cd} · ${s.manaCost} mp${tag}`;
 }
 
 const MAX_PROJECTILES = 6;
@@ -81,6 +90,7 @@ export class SpellCreator {
 
     private projStates: ProjState[] = [defaultProjState()];
     private selectedProjIdx = 0;
+    private activeSlot = 0;
 
     readonly slots: (Spell | null)[] = [null, null, null, null];
     private readonly overlay: HTMLElement;
@@ -91,10 +101,16 @@ export class SpellCreator {
     private previewEl!:       HTMLElement;
     private vizHintEl!:       HTMLElement;
     private slotListEl!:      HTMLElement;
+    private slotTabsEl!:      HTMLElement;
+    private copyRowEl!:       HTMLElement;
     private projTabsEl!:      HTMLElement;
     private projElementBtns!: HTMLElement[];
     private projPowerSlider!: HTMLInputElement;
     private projPowerInput!:  HTMLInputElement;
+    private castSlider!:      HTMLInputElement;
+    private castInput!:       HTMLInputElement;
+    private cdSlider!:        HTMLInputElement;
+    private cdInput!:         HTMLInputElement;
     private rightSlider!:     HTMLInputElement;
     private rightInput!:      HTMLInputElement;
     private upSlider!:        HTMLInputElement;
@@ -108,9 +124,9 @@ export class SpellCreator {
 
     constructor() {
         this.overlay = document.getElementById('spell-creator')!;
-        this.slots[0] = this.makeSpell();
         this.buildHTML();
         this.bindEvents();
+        this.commitToActiveSlot();
     }
 
     private makeSpell(): Spell {
@@ -125,6 +141,65 @@ export class SpellCreator {
             manaCost:  this.projStates.reduce((s, p) => s + calcManaCost(p.power, this.castTime), 0),
             projectiles,
         };
+    }
+
+    private commitToActiveSlot(): void {
+        this.slots[this.activeSlot] = this.makeSpell();
+        if (this.slotTabsEl) this.renderSlotTabs();
+    }
+
+    private selectSlot(i: number): void {
+        this.activeSlot = i;
+        const spell = this.slots[i];
+        if (spell) {
+            this.castTime   = spell.castTime;
+            this.cooldown   = spell.cooldown;
+            this.projStates = spell.projectiles.map(p => ({
+                right: p.right, up: p.up, forward: p.forward,
+                pitch: p.pitch, yaw: p.yaw, element: p.element, power: p.power,
+            }));
+        } else {
+            this.castTime   = 0;
+            this.cooldown   = 2000;
+            this.projStates = [defaultProjState()];
+        }
+        this.selectedProjIdx = 0;
+        this.renderSlotTabs();
+        this.renderCopyRow();
+        this.loadEditorUI();
+        this.updatePreview();
+    }
+
+    private copyToSlot(i: number): void {
+        this.slots[i] = this.makeSpell();
+        this.renderSlotTabs();
+        this.updateSlotList();
+    }
+
+    private renderSlotTabs(): void {
+        this.slotTabsEl.innerHTML = [0, 1, 2, 3].map(i => {
+            const s    = this.slots[i];
+            const icon = s ? slotIcons(s) + ' ' : '';
+            const cls  = i === this.activeSlot ? ' active' : '';
+            return `<button class="sc-btn sc-slot-tab${cls}" data-slot-tab="${i}">${icon}Slot ${i + 1}</button>`;
+        }).join('');
+    }
+
+    private renderCopyRow(): void {
+        const btns = [0, 1, 2, 3]
+            .filter(i => i !== this.activeSlot)
+            .map(i => `<button class="sc-btn sc-slot-copy" data-slot-copy="${i}">→ Slot ${i + 1}</button>`)
+            .join('');
+        this.copyRowEl.innerHTML = `<span class="sc-copy-label">Copy to:</span>${btns}`;
+    }
+
+    private loadEditorUI(): void {
+        this.castSlider.value = String(this.castTime);
+        this.castInput.value  = fmt1(this.castTime / 1000);
+        this.cdSlider.value   = String(this.cooldown);
+        this.cdInput.value    = fmt1(this.cooldown / 1000);
+        this.renderProjTabs();
+        this.loadProjToEditor();
     }
 
     private projTabsHTML(): string {
@@ -146,6 +221,21 @@ export class SpellCreator {
 <div class="sc-layout">
   <div class="sc-panel">
     <h2 class="sc-title">SPELL CREATOR</h2>
+
+    <div class="sc-section">
+      <div class="sc-label">EDITING SLOT</div>
+      <div class="sc-row" id="sc-slot-tabs">
+        ${[0, 1, 2, 3].map(i =>
+            `<button class="sc-btn sc-slot-tab${i === this.activeSlot ? ' active' : ''}" data-slot-tab="${i}">Slot ${i + 1}</button>`
+        ).join('')}
+      </div>
+      <div class="sc-copy-row" id="sc-copy-row">
+        <span class="sc-copy-label">Copy to:</span>
+        ${[0, 1, 2, 3].filter(i => i !== this.activeSlot).map(i =>
+            `<button class="sc-btn sc-slot-copy" data-slot-copy="${i}">→ Slot ${i + 1}</button>`
+        ).join('')}
+      </div>
+    </div>
 
     <div class="sc-section">
       <div class="sc-label">CAST TIME <span class="sc-range-hint">0 – 3 s</span></div>
@@ -216,16 +306,6 @@ export class SpellCreator {
 
     <div class="sc-preview" id="sc-preview"></div>
 
-    <div class="sc-section">
-      <div class="sc-label">SAVE TO SLOT</div>
-      <div class="sc-row">
-        <button class="sc-btn sc-slot-save" data-slot="0">1</button>
-        <button class="sc-btn sc-slot-save" data-slot="1">2</button>
-        <button class="sc-btn sc-slot-save" data-slot="2">3</button>
-        <button class="sc-btn sc-slot-save" data-slot="3">4</button>
-      </div>
-    </div>
-
     <div id="sc-slot-list" class="sc-slots"></div>
     <div class="sc-footer">Tab — close &nbsp;·&nbsp; 1–4 — cast in combat</div>
   </div>
@@ -238,10 +318,16 @@ export class SpellCreator {
 
         this.previewEl       = this.overlay.querySelector<HTMLElement>('#sc-preview')!;
         this.slotListEl      = this.overlay.querySelector<HTMLElement>('#sc-slot-list')!;
+        this.slotTabsEl      = this.overlay.querySelector<HTMLElement>('#sc-slot-tabs')!;
+        this.copyRowEl       = this.overlay.querySelector<HTMLElement>('#sc-copy-row')!;
         this.projTabsEl      = this.overlay.querySelector<HTMLElement>('#sc-proj-tabs')!;
         this.projElementBtns = [...this.overlay.querySelectorAll<HTMLElement>('[data-proj-element]')];
 
         const get = (id: string) => this.overlay.querySelector<HTMLInputElement>(`#${id}`)!;
+        this.castSlider      = get('sc-cast-slider');
+        this.castInput       = get('sc-cast-input');
+        this.cdSlider        = get('sc-cd-slider');
+        this.cdInput         = get('sc-cd-input');
         this.projPowerSlider = get('sc-proj-power-slider');
         this.projPowerInput  = get('sc-proj-power-input');
         this.rightSlider     = get('sc-right-slider');
@@ -257,7 +343,6 @@ export class SpellCreator {
 
         this.vizHintEl = this.overlay.querySelector<HTMLElement>('.sc-viz-hint')!;
 
-        // Visualization
         const vizCanvas = this.overlay.querySelector<HTMLCanvasElement>('#sc-viz-canvas')!;
         this.viz = new SpellVisualization(vizCanvas);
 
@@ -321,18 +406,18 @@ export class SpellCreator {
     }
 
     private bindEvents(): void {
-        const get = (id: string) => this.overlay.querySelector<HTMLInputElement>(`#${id}`)!;
-        const castSlider = get('sc-cast-slider');
-        const castInput  = get('sc-cast-input');
-        const cdSlider   = get('sc-cd-slider');
-        const cdInput    = get('sc-cd-input');
-
         this.overlay.addEventListener('click', e => {
             const t = e.target as HTMLElement;
 
-            if (t.classList.contains('sc-slot-save') && t.dataset['slot'] !== undefined) {
-                this.slots[Number(t.dataset['slot'])] = this.makeSpell();
-                this.updateSlotList();
+            const slotTab = t.dataset['slotTab'];
+            if (slotTab !== undefined) {
+                this.selectSlot(Number(slotTab));
+                return;
+            }
+
+            const slotCopy = t.dataset['slotCopy'];
+            if (slotCopy !== undefined) {
+                this.copyToSlot(Number(slotCopy));
                 return;
             }
 
@@ -387,32 +472,32 @@ export class SpellCreator {
         });
 
         // Cast time
-        castSlider.addEventListener('input', () => {
-            this.castTime = Number(castSlider.value);
-            castInput.value = fmt1(this.castTime / 1000);
+        this.castSlider.addEventListener('input', () => {
+            this.castTime = Number(this.castSlider.value);
+            this.castInput.value = fmt1(this.castTime / 1000);
             this.updatePreview();
         });
-        castInput.addEventListener('input', () => {
-            const secs = Math.min(3, Math.max(0, Number(castInput.value) || 0));
+        this.castInput.addEventListener('input', () => {
+            const secs = Math.min(3, Math.max(0, Number(this.castInput.value) || 0));
             this.castTime = Math.round(secs * 1000);
-            castSlider.value = String(this.castTime);
+            this.castSlider.value = String(this.castTime);
             this.updatePreview();
         });
-        castInput.addEventListener('blur', () => { castInput.value = fmt1(this.castTime / 1000); });
+        this.castInput.addEventListener('blur', () => { this.castInput.value = fmt1(this.castTime / 1000); });
 
         // Cooldown
-        cdSlider.addEventListener('input', () => {
-            this.cooldown = Number(cdSlider.value);
-            cdInput.value = fmt1(this.cooldown / 1000);
+        this.cdSlider.addEventListener('input', () => {
+            this.cooldown = Number(this.cdSlider.value);
+            this.cdInput.value = fmt1(this.cooldown / 1000);
             this.updatePreview();
         });
-        cdInput.addEventListener('input', () => {
-            const secs = Math.min(10, Math.max(0, Number(cdInput.value) || 0));
+        this.cdInput.addEventListener('input', () => {
+            const secs = Math.min(10, Math.max(0, Number(this.cdInput.value) || 0));
             this.cooldown = Math.round(secs * 1000);
-            cdSlider.value = String(this.cooldown);
+            this.cdSlider.value = String(this.cooldown);
             this.updatePreview();
         });
-        cdInput.addEventListener('blur', () => { cdInput.value = fmt1(this.cooldown / 1000); });
+        this.cdInput.addEventListener('blur', () => { this.cdInput.value = fmt1(this.cooldown / 1000); });
 
         // Per-proj power
         this.projPowerSlider.addEventListener('input', () => {
@@ -443,6 +528,7 @@ export class SpellCreator {
                 (curr() as Record<string, number>)[prop as string] = v;
                 input.value = v.toFixed(decimals);
                 this.syncViz();
+                this.commitToActiveSlot();
             });
             input.addEventListener('input', () => {
                 const v = parseFloat(
@@ -451,6 +537,7 @@ export class SpellCreator {
                 (curr() as Record<string, number>)[prop as string] = v;
                 slider.value = String(v);
                 this.syncViz();
+                this.commitToActiveSlot();
             });
             input.addEventListener('blur', () => {
                 input.value = ((curr() as Record<string, number>)[prop as string]).toFixed(decimals);
@@ -481,6 +568,8 @@ export class SpellCreator {
 <div class="sc-proj-preview-list">${projLines}</div>
 <div class="sc-desc">${ctLabel} · ${cdLabel}</div>`;
 
+        this.commitToActiveSlot();
+        this.updateSlotList();
         this.syncViz();
     }
 
@@ -488,7 +577,7 @@ export class SpellCreator {
         this.slotListEl.innerHTML =
             '<div class="sc-label">YOUR SPELLS</div>' +
             this.slots.map((s, i) =>
-                `<div class="sc-slot-row"><span class="sc-slot-num">${i + 1}</span>${s ? spellLabel(s) : '<em>Empty</em>'}</div>`
+                `<div class="sc-slot-row"><span class="sc-slot-num">${i + 1}</span>${s ? spellLabel(s, i === this.activeSlot) : '<em>Empty</em>'}</div>`
             ).join('');
     }
 
