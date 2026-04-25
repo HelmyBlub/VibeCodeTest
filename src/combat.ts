@@ -6,7 +6,7 @@ import {
     FIREBALL_LIFETIME, FIREBALL_SPEED, ICE_SLOW_DURATION,
     LIGHTNING_CHAIN_MULT, LIGHTNING_CHAIN_RANGE,
 } from './constants';
-import type { Enemy, Fireball, Spell, SpellElement } from './types';
+import type { Enemy, Fireball, ProjectileConfig, Spell, SpellElement } from './types';
 
 const ELEMENT_COLOR: Record<SpellElement, [Color3, Color3]> = {
     fire:      [new Color3(1, 0.4, 0),    new Color3(1, 0.3, 0)],
@@ -40,11 +40,33 @@ export class CombatSystem {
         return m;
     }
 
-    castSpell(origin: Vector3, direction: Vector3, spell: Spell): boolean {
-        const [, emissive] = ELEMENT_COLOR[spell.element];
+    castSpell(playerPos: Vector3, playerForward: Vector3, spell: Spell): void {
+        const right   = Vector3.Cross(Vector3.Up(), playerForward).normalize();
+        const basePos = playerPos.add(new Vector3(0, 1.2, 0));
+
+        for (const pc of spell.projectiles) {
+            const worldOffset = right.scale(pc.right)
+                .add(Vector3.Up().scale(pc.up))
+                .add(playerForward.scale(pc.forward));
+
+            const pitchRad = (pc.pitch * Math.PI) / 180;
+            const yawRad   = (pc.yaw   * Math.PI) / 180;
+            const cosP = Math.cos(pitchRad);
+
+            const dir = right.scale(Math.sin(yawRad) * cosP)
+                .add(Vector3.Up().scale(Math.sin(pitchRad)))
+                .add(playerForward.scale(Math.cos(yawRad) * cosP))
+                .normalize();
+
+            this.spawnProjectile(basePos.add(worldOffset), dir, pc);
+        }
+    }
+
+    private spawnProjectile(origin: Vector3, direction: Vector3, pc: ProjectileConfig): void {
+        const [, emissive] = ELEMENT_COLOR[pc.element];
         const mesh = MeshBuilder.CreateSphere('spell', { diameter: 0.42, segments: 6 }, this.scene);
-        mesh.position = origin.clone().add(direction.scale(0.6));
-        mesh.material = this.mats[spell.element];
+        mesh.position = origin.add(direction.scale(0.6));
+        mesh.material = this.mats[pc.element];
 
         const light = new PointLight('spellLight', mesh.position.clone(), this.scene);
         light.diffuse   = emissive;
@@ -55,11 +77,10 @@ export class CombatSystem {
             mesh, light,
             vel:        direction.scale(FIREBALL_SPEED),
             life:       FIREBALL_LIFETIME,
-            damage:     spell.damage,
-            element:    spell.element,
-            burnDamage: spell.burnDamage,
+            damage:     pc.damage,
+            element:    pc.element,
+            burnDamage: pc.burnDamage,
         });
-        return true;
     }
 
     private spawnChainFlash(pos: Vector3): void {

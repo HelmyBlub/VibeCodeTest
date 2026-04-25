@@ -57,12 +57,12 @@ function cancelCast(): void {
 }
 
 function fireSpell(spell: Spell, slotIndex: number): void {
-    const dir = player.position.subtract(camera.position);
-    dir.y = 0;
-    if (dir.length() < 0.01) return;
-    combat.castSpell(player.position.add(new Vector3(0, 1.2, 0)), dir.normalize(), spell);
+    const forward = player.position.subtract(camera.position);
+    forward.y = 0;
+    if (forward.length() < 0.01) return;
+    combat.castSpell(player.position, forward.normalize(), spell);
     slotLastCast[slotIndex]   = Date.now();
-    slotCooldownMs[slotIndex] = spell.cooldown; // lock in the CD duration used
+    slotCooldownMs[slotIndex] = spell.cooldown;
 }
 
 window.addEventListener('keydown', e => {
@@ -107,7 +107,7 @@ window.addEventListener('keydown', e => {
     } else {
         casting = { spell, slotIndex, startTime: Date.now(), duration };
         const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
-        castBarLabel.textContent = `Casting ${cap(spell.element)}… (move to cancel)`;
+        castBarLabel.textContent = `Casting ${cap(spell.projectiles[0].element)}… (move to cancel)`;
         castBarFill.style.width = '0%';
         castBarEl.style.display = 'block';
     }
