@@ -3,7 +3,7 @@ import {
 } from '@babylonjs/core';
 import {
     ENEMY_MAX_HP, ENEMY_MELEE_DAMAGE, ENEMY_MELEE_INTERVAL, ENEMY_MELEE_RANGE, ENEMY_SPEED,
-    FIRE_BURN_INTERVAL, ICE_SLOW_FACTOR,
+    FIRE_BURN_INTERVAL,
 } from './constants';
 import type { Enemy } from './types';
 
@@ -56,7 +56,7 @@ export class EnemyManager {
             root, eb, eh, hpBg, hpBar,
             hp: ENEMY_MAX_HP, lastMelee: 0,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
-            slowEnd: 0,
+            slowEnd: 0, slowFactor: 1,
         });
     }
 
@@ -82,7 +82,7 @@ export class EnemyManager {
             const toPlayer = playerPos.subtract(en.root.position);
             toPlayer.y = 0;
             const dist = toPlayer.length();
-            const speed = now < en.slowEnd ? ENEMY_SPEED * ICE_SLOW_FACTOR : ENEMY_SPEED;
+            const speed = now < en.slowEnd ? ENEMY_SPEED * en.slowFactor : ENEMY_SPEED;
 
             if (dist > ENEMY_MELEE_RANGE) {
                 const step = toPlayer.normalize().scaleInPlace(speed);
