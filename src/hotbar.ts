@@ -38,16 +38,22 @@ export class Hotbar {
             if (spell !== this.prevSpells[i]) {
                 this.prevSpells[i] = spell;
                 if (spell) {
-                    const projs = spell.projectiles;
-                    const firstEl = projs[0].element;
-                    const allSame = projs.every(p => p.element === firstEl);
-                    const displayEl = allSame ? firstEl : null;
-                    this.iconEls[i].textContent = displayEl ? ELEMENT_EMOJI[displayEl] : '✨';
-                    this.nameEls[i].textContent = displayEl
-                        ? displayEl[0].toUpperCase() + displayEl.slice(1)
-                        : 'Mixed';
-                    if (displayEl) slot.dataset['element'] = displayEl;
-                    else delete slot.dataset['element'];
+                    if (spell.stages?.length) {
+                        this.iconEls[i].textContent = '⛓';
+                        this.nameEls[i].textContent = 'Chain';
+                        delete slot.dataset['element'];
+                    } else {
+                        const projs = spell.projectiles;
+                        const firstEl = projs[0].element;
+                        const allSame = projs.every(p => p.element === firstEl);
+                        const displayEl = allSame ? firstEl : null;
+                        this.iconEls[i].textContent = displayEl ? ELEMENT_EMOJI[displayEl] : '✨';
+                        this.nameEls[i].textContent = displayEl
+                            ? displayEl[0].toUpperCase() + displayEl.slice(1)
+                            : 'Mixed';
+                        if (displayEl) slot.dataset['element'] = displayEl;
+                        else delete slot.dataset['element'];
+                    }
                 } else {
                     this.iconEls[i].textContent = '';
                     this.nameEls[i].textContent = '';

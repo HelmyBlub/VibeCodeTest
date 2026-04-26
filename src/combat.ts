@@ -2,14 +2,21 @@ import {
     Color3, Mesh, MeshBuilder, PointLight, Scene, StandardMaterial, Vector3,
 } from '@babylonjs/core';
 import {
-    ENEMY_MAX_HP, FIRE_BURN_DURATION, FIRE_GRAVITY, FIRE_MAX_DURATION, FIRE_MIN_DURATION,
+    ENEMY_MAX_HP,
+    FIRE_BURN_DURATION, FIRE_GRAVITY, FIRE_MAX_DURATION, FIRE_MIN_DURATION,
     FIRE_SPEED, FIREBALL_HIT_RADIUS, GROUND_Y,
     ICE_DRAG, ICE_FALL_RATE, ICE_MAX_DURATION, ICE_MAX_FALL_SPEED, ICE_MAX_SLOW, ICE_MIN_SLOW,
     ICE_SLOW_DURATION, ICE_SPEED,
     LIGHTNING_BASE_RANGE, LIGHTNING_CHAIN_MULT, LIGHTNING_CHAIN_RANGE,
     LIGHTNING_MAX_CHAINS, LIGHTNING_RANGE_POWER, LIGHTNING_SPEED,
+    STAGE_CARRIER_SPEED,
 } from './constants';
-import type { Enemy, Fireball, ProjectileConfig, Spell, SpellElement } from './types';
+import type {
+    Enemy, Fireball, ProjectileConfig, Spell, SpellElement,
+    SpellStage, StageElement,
+} from './types';
+
+// ── Element colours ───────────────────────────────────────────────────────────
 
 const ELEMENT_COLOR: Record<SpellElement, [Color3, Color3]> = {
     fire:      [new Color3(1, 0.4, 0),    new Color3(1, 0.3, 0)],
@@ -17,10 +24,37 @@ const ELEMENT_COLOR: Record<SpellElement, [Color3, Color3]> = {
     lightning: [new Color3(1, 0.85, 0.1), new Color3(1, 0.9, 0.2)],
 };
 
+const STAGE_COLOR: Record<StageElement, [Color3, Color3]> = {
+    fire:      ELEMENT_COLOR.fire,
+    ice:       ELEMENT_COLOR.ice,
+    lightning: ELEMENT_COLOR.lightning,
+    none:      [new Color3(0.6, 0.6, 0.85), new Color3(0.4, 0.4, 0.65)],
+};
+
+// ── Internal types ────────────────────────────────────────────────────────────
+
 interface ChainFlash { mesh: Mesh; light: PointLight; life: number; }
 
+interface LiveStage {
+    config:     SpellStage;
+    chain:      SpellStage[];
+    stageIdx:   number;
+    mesh:       Mesh;
+    light:      PointLight;
+    mat:        StandardMaterial;
+    vel:        Vector3;
+    spawnTime:  number;
+    lastFire:   number;
+    fired:      boolean;
+    hitEnemies: Set<Enemy>;
+    grounded:   boolean;
+}
+
+// ── CombatSystem ──────────────────────────────────────────────────────────────
+
 export class CombatSystem {
-    private readonly projectiles: Fireball[] = [];
+    private readonly projectiles: Fireball[]  = [];
+    private readonly liveStages:  LiveStage[] = [];
     private readonly flashes:     ChainFlash[] = [];
     private readonly mats: Record<SpellElement, StandardMaterial>;
     private readonly flashMat: StandardMaterial;
@@ -43,6 +77,8 @@ export class CombatSystem {
         return m;
     }
 
+    // ── Salvo (simple) casting ────────────────────────────────────────────────
+
     castSpell(playerPos: Vector3, playerForward: Vector3, spell: Spell): void {
         const right   = Vector3.Cross(Vector3.Up(), playerForward).normalize();
         const basePos = playerPos.add(new Vector3(0, 1.2, 0));
@@ -52,15 +88,7 @@ export class CombatSystem {
                 .add(Vector3.Up().scale(pc.up))
                 .add(playerForward.scale(pc.forward));
 
-            const pitchRad = (pc.pitch * Math.PI) / 180;
-            const yawRad   = (pc.yaw   * Math.PI) / 180;
-            const cosP = Math.cos(pitchRad);
-
-            const dir = right.scale(Math.sin(yawRad) * cosP)
-                .add(Vector3.Up().scale(Math.sin(pitchRad)))
-                .add(playerForward.scale(Math.cos(yawRad) * cosP))
-                .normalize();
-
+            const dir = this.pitchYawDir(pc.pitch, pc.yaw, playerForward, right);
             this.spawnProjectile(basePos.add(worldOffset), dir, pc);
         }
     }
@@ -76,34 +104,28 @@ export class CombatSystem {
         light.intensity = 1.5;
         light.range     = 6;
 
-        const now       = Date.now();
-        const spawnPos  = mesh.position.clone();
-        const t         = pc.power / 100;
+        const now      = Date.now();
+        const spawnPos = mesh.position.clone();
+        const t        = pc.power / 100;
 
-        let vel: Vector3;
-        let maxDuration: number;
-        let maxRange: number;
-        let chainsLeft: number;
-        let slowFactor: number;
+        let vel: Vector3; let maxDuration: number;
+        let maxRange: number; let chainsLeft: number; let slowFactor: number;
 
         switch (pc.element) {
             case 'fire':
                 vel         = direction.scale(FIRE_SPEED);
                 maxDuration = FIRE_MIN_DURATION + t * (FIRE_MAX_DURATION - FIRE_MIN_DURATION);
-                maxRange    = 0;
-                chainsLeft  = 0;
-                slowFactor  = 1;
+                maxRange    = 0; chainsLeft = 0; slowFactor = 1;
                 break;
             case 'ice':
                 vel         = direction.scale(ICE_SPEED);
                 maxDuration = ICE_MAX_DURATION;
-                maxRange    = 0;
-                chainsLeft  = 0;
+                maxRange    = 0; chainsLeft = 0;
                 slowFactor  = ICE_MIN_SLOW - t * (ICE_MIN_SLOW - ICE_MAX_SLOW);
                 break;
             case 'lightning':
                 vel         = direction.scale(LIGHTNING_SPEED);
-                maxDuration = 10000; // fallback — range check expires it first
+                maxDuration = 10000;
                 maxRange    = LIGHTNING_BASE_RANGE + pc.power * LIGHTNING_RANGE_POWER;
                 chainsLeft  = Math.floor(t * LIGHTNING_MAX_CHAINS);
                 slowFactor  = 1;
@@ -112,17 +134,10 @@ export class CombatSystem {
 
         this.projectiles.push({
             mesh, light, vel,
-            damage:      pc.damage,
-            element:     pc.element,
-            burnDamage:  pc.burnDamage,
-            spawnTime:   now,
-            maxDuration,
-            grounded:    false,
-            hitEnemies:  new Set(),
-            spawnPos,
-            maxRange,
-            chainsLeft,
-            slowFactor,
+            damage: pc.damage, element: pc.element, burnDamage: pc.burnDamage,
+            spawnTime: now, maxDuration,
+            grounded: false, hitEnemies: new Set(),
+            spawnPos, maxRange, chainsLeft, slowFactor,
         });
     }
 
@@ -130,12 +145,8 @@ export class CombatSystem {
         const mesh = MeshBuilder.CreateSphere('chainFlash', { diameter: 0.55, segments: 4 }, this.scene);
         mesh.position = pos.clone();
         mesh.material = this.flashMat;
-
         const light = new PointLight('chainLight', pos.clone(), this.scene);
-        light.diffuse   = new Color3(1, 1, 0.3);
-        light.intensity = 2.5;
-        light.range     = 7;
-
+        light.diffuse = new Color3(1, 1, 0.3); light.intensity = 2.5; light.range = 7;
         this.flashes.push({ mesh, light, life: 10 });
     }
 
@@ -143,49 +154,271 @@ export class CombatSystem {
         p: Fireball, primary: Enemy, enemies: Enemy[], onKill: (en: Enemy) => void,
     ): void {
         const chained = new Set<Enemy>([primary]);
-        let source    = primary;
-        let remaining = p.chainsLeft;
-
+        let source = primary; let remaining = p.chainsLeft;
         while (remaining > 0) {
-            let nearest: Enemy | null = null;
-            let nearestDist = LIGHTNING_CHAIN_RANGE;
+            let nearest: Enemy | null = null; let nearestDist = LIGHTNING_CHAIN_RANGE;
             for (const other of enemies) {
                 if (other.hp <= 0 || chained.has(other)) continue;
                 const d = Vector3.Distance(source.root.position, other.root.position);
                 if (d < nearestDist) { nearestDist = d; nearest = other; }
             }
             if (!nearest) break;
-
             const chainDmg = Math.round(p.damage * LIGHTNING_CHAIN_MULT);
             nearest.hp -= chainDmg;
             nearest.hpBar.scaling.x = Math.max(0, nearest.hp / ENEMY_MAX_HP);
             if (nearest.hp <= 0) onKill(nearest);
             this.spawnChainFlash(nearest.root.position.add(new Vector3(0, 2.5, 0)));
-
-            chained.add(nearest);
-            source = nearest;
-            remaining--;
+            chained.add(nearest); source = nearest; remaining--;
         }
     }
+
+    // ── Chain (staged) casting ────────────────────────────────────────────────
+
+    castStagedSpell(playerPos: Vector3, playerForward: Vector3, spell: Spell): void {
+        if (!spell.stages?.length) return;
+        const chain  = spell.stages;
+        const s0     = chain[0];
+        const right  = Vector3.Cross(Vector3.Up(), playerForward).normalize();
+        const origin = playerPos.add(new Vector3(0, 1.2, 0));
+
+        for (let i = 0; i < s0.count; i++) {
+            const yaw = this.fanYaw(s0.yaw, s0.count, s0.yawSpread, i);
+            const dir = this.pitchYawDir(s0.pitch, yaw, playerForward, right);
+            this.spawnLiveStage(origin.clone(), dir, chain, 0);
+        }
+    }
+
+    private spawnLiveStage(pos: Vector3, dir: Vector3, chain: SpellStage[], idx: number): void {
+        const cfg             = chain[idx];
+        const [diffuse, emit] = STAGE_COLOR[cfg.element];
+
+        const mat = new StandardMaterial(`stMat`, this.scene);
+        mat.diffuseColor  = diffuse;
+        mat.emissiveColor = emit;
+
+        let mesh: Mesh;
+        if (cfg.stationary) {
+            mesh = MeshBuilder.CreateSphere('stArea', { diameter: 1.8, segments: 8 }, this.scene);
+            mat.alpha = 0.4;
+        } else {
+            mesh = MeshBuilder.CreateSphere('stProj', { diameter: 0.42, segments: 6 }, this.scene);
+        }
+        mesh.position = pos.clone();
+        mesh.material  = mat;
+
+        const light = new PointLight('stLight', pos.clone(), this.scene);
+        light.diffuse   = emit;
+        light.intensity = cfg.stationary ? 0.6 : 1.5;
+        light.range     = cfg.stationary ? 5 : 6;
+
+        const vel = cfg.stationary ? Vector3.Zero() : dir.scale(this.stageSpeed(cfg.element));
+
+        this.liveStages.push({
+            config: cfg, chain, stageIdx: idx,
+            mesh, light, mat, vel,
+            spawnTime:  Date.now(),
+            lastFire:   Date.now(),
+            fired:      false,
+            hitEnemies: new Set(),
+            grounded:   false,
+        });
+    }
+
+    private triggerNext(ls: LiveStage): void {
+        const nextIdx = ls.stageIdx + 1;
+        if (nextIdx >= ls.chain.length) return;
+        const next   = ls.chain[nextIdx];
+        const base   = ls.mesh.position.clone();
+        const wFwd   = new Vector3(0, 0, 1);
+        const wRight = new Vector3(1, 0, 0);
+
+        for (let i = 0; i < next.count; i++) {
+            const spawnPos = base.clone();
+            if (next.spread > 0) {
+                const a = Math.random() * Math.PI * 2;
+                const r = Math.random() * next.spread;
+                spawnPos.x += Math.cos(a) * r;
+                spawnPos.z += Math.sin(a) * r;
+            }
+            const yaw = this.fanYaw(next.yaw, next.count, next.yawSpread, i);
+            const dir = this.pitchYawDir(next.pitch, yaw, wFwd, wRight);
+            this.spawnLiveStage(spawnPos, dir, ls.chain, nextIdx);
+        }
+    }
+
+    private disposeLiveStage(ls: LiveStage, idx: number): void {
+        ls.mesh.dispose(); ls.light.dispose(); ls.mat.dispose();
+        this.liveStages.splice(idx, 1);
+    }
+
+    private moveStage(ls: LiveStage): void {
+        if (ls.config.stationary || ls.grounded) return;
+        switch (ls.config.element) {
+            case 'fire':
+                ls.vel.y += FIRE_GRAVITY;
+                break;
+            case 'ice':
+                ls.vel.y = Math.max(-ICE_MAX_FALL_SPEED, ls.vel.y - ICE_FALL_RATE);
+                ls.vel.x *= ICE_DRAG; ls.vel.z *= ICE_DRAG;
+                break;
+            // lightning and none: constant velocity, no changes
+        }
+        ls.mesh.position.addInPlace(ls.vel);
+        ls.light.position.copyFrom(ls.mesh.position);
+        if (ls.mesh.position.y <= GROUND_Y) {
+            ls.mesh.position.y = GROUND_Y;
+            ls.vel.setAll(0);
+            ls.grounded = true;
+        }
+    }
+
+    private applyStageHitEffect(
+        ls: LiveStage, en: Enemy, enemies: Enemy[], onKill: (e: Enemy) => void, now: number,
+    ): void {
+        switch (ls.config.element) {
+            case 'fire':
+                en.burnEnd = now + FIRE_BURN_DURATION;
+                en.burnDamage = ls.config.burnDamage;
+                en.lastBurnTick = now;
+                break;
+            case 'ice': {
+                const t = ls.config.power / 100;
+                en.slowEnd    = now + ICE_SLOW_DURATION;
+                en.slowFactor = ICE_MIN_SLOW - t * (ICE_MIN_SLOW - ICE_MAX_SLOW);
+                break;
+            }
+            case 'lightning': {
+                // single chain jump for staged lightning
+                let nearest: Enemy | null = null; let nd = LIGHTNING_CHAIN_RANGE;
+                for (const other of enemies) {
+                    if (other === en || other.hp <= 0) continue;
+                    const d = Vector3.Distance(en.root.position, other.root.position);
+                    if (d < nd) { nd = d; nearest = other; }
+                }
+                if (nearest) {
+                    const cdmg = Math.round(ls.config.damage * LIGHTNING_CHAIN_MULT);
+                    nearest.hp -= cdmg;
+                    nearest.hpBar.scaling.x = Math.max(0, nearest.hp / ENEMY_MAX_HP);
+                    if (nearest.hp <= 0) onKill(nearest);
+                    this.spawnChainFlash(nearest.root.position.add(new Vector3(0, 2.5, 0)));
+                }
+                break;
+            }
+            // 'none': no combat effect
+        }
+    }
+
+    private updateLiveStages(enemies: Enemy[], onKill: (en: Enemy) => void): void {
+        const now = Date.now();
+
+        for (let i = this.liveStages.length - 1; i >= 0; i--) {
+            const ls  = this.liveStages[i];
+            const age = now - ls.spawnTime;
+            const cfg = ls.config;
+
+            this.moveStage(ls);
+
+            // Duration expiry
+            if (age >= cfg.duration) {
+                this.disposeLiveStage(ls, i);
+                continue;
+            }
+
+            // Trigger logic
+            if (cfg.trigger === 'delay' && !ls.fired && age >= cfg.triggerMs) {
+                ls.fired = true;
+                this.triggerNext(ls);
+                this.disposeLiveStage(ls, i);
+                continue;
+            }
+
+            if (cfg.trigger === 'interval' && now - ls.lastFire >= cfg.triggerMs) {
+                ls.lastFire = now;
+                this.triggerNext(ls);
+                // interval stages stay alive between firings
+            }
+
+            if (cfg.trigger === 'impact' && !ls.config.stationary && ls.grounded && !ls.fired) {
+                ls.fired = true;
+                this.triggerNext(ls);
+                this.disposeLiveStage(ls, i);
+                continue;
+            }
+
+            // Enemy collision — only non-carrier, non-stationary stages
+            if (cfg.element !== 'none' && !cfg.stationary) {
+                for (const en of enemies) {
+                    if (en.hp <= 0 || ls.hitEnemies.has(en)) continue;
+                    const dist = Vector3.Distance(
+                        ls.mesh.position,
+                        en.root.position.add(new Vector3(0, 1, 0)),
+                    );
+                    if (dist >= FIREBALL_HIT_RADIUS) continue;
+
+                    ls.hitEnemies.add(en);
+                    en.hp -= cfg.damage;
+                    en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
+                    this.applyStageHitEffect(ls, en, enemies, onKill, now);
+                    if (en.hp <= 0) onKill(en);
+
+                    if (cfg.trigger === 'impact' && !ls.fired) {
+                        ls.fired = true;
+                        this.triggerNext(ls);
+                        this.disposeLiveStage(ls, i);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Shared helpers ────────────────────────────────────────────────────────
+
+    private pitchYawDir(pitchDeg: number, yawDeg: number, forward: Vector3, right: Vector3): Vector3 {
+        const pr = pitchDeg * Math.PI / 180;
+        const yr = yawDeg   * Math.PI / 180;
+        const cosP = Math.cos(pr);
+        return right.scale(Math.sin(yr) * cosP)
+            .add(Vector3.Up().scale(Math.sin(pr)))
+            .add(forward.scale(Math.cos(yr) * cosP))
+            .normalize();
+    }
+
+    // count=1 → random within ±spread/2. count>1 → evenly fanned across spread.
+    private fanYaw(base: number, count: number, spread: number, i: number): number {
+        if (count === 1) return base + (Math.random() - 0.5) * spread;
+        if (spread === 0) return base;
+        return base + ((i / (count - 1)) - 0.5) * spread;
+    }
+
+    private stageSpeed(el: StageElement): number {
+        switch (el) {
+            case 'fire':      return FIRE_SPEED;
+            case 'ice':       return ICE_SPEED;
+            case 'lightning': return LIGHTNING_SPEED;
+            case 'none':      return STAGE_CARRIER_SPEED;
+        }
+    }
+
+    // ── Main update ───────────────────────────────────────────────────────────
 
     update(enemies: Enemy[], onKill: (en: Enemy) => void): void {
         const now = Date.now();
 
+        // Chain flashes
         for (let i = this.flashes.length - 1; i >= 0; i--) {
             const f = this.flashes[i];
-            f.life--;
-            if (f.life <= 0) {
-                f.mesh.dispose();
-                f.light.dispose();
+            if (--f.life <= 0) {
+                f.mesh.dispose(); f.light.dispose();
                 this.flashes.splice(i, 1);
             }
         }
 
+        // Salvo projectiles
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
             const p   = this.projectiles[i];
             const age = now - p.spawnTime;
 
-            // --- movement ---
             switch (p.element) {
                 case 'fire':
                     if (!p.grounded) {
@@ -193,16 +426,14 @@ export class CombatSystem {
                         p.mesh.position.addInPlace(p.vel);
                         if (p.mesh.position.y <= GROUND_Y) {
                             p.mesh.position.y = GROUND_Y;
-                            p.vel.setAll(0);
-                            p.grounded = true;
+                            p.vel.setAll(0); p.grounded = true;
                         }
                         p.light.position.copyFrom(p.mesh.position);
                     }
                     break;
                 case 'ice':
                     p.vel.y = Math.max(-ICE_MAX_FALL_SPEED, p.vel.y - ICE_FALL_RATE);
-                    p.vel.x *= ICE_DRAG;
-                    p.vel.z *= ICE_DRAG;
+                    p.vel.x *= ICE_DRAG; p.vel.z *= ICE_DRAG;
                     p.mesh.position.addInPlace(p.vel);
                     p.light.position.copyFrom(p.mesh.position);
                     break;
@@ -212,34 +443,29 @@ export class CombatSystem {
                     break;
             }
 
-            // --- expiry ---
-            const rangeExceeded = p.element === 'lightning'
-                && Vector3.Distance(p.mesh.position, p.spawnPos) >= p.maxRange;
-            const groundedIce   = p.element === 'ice' && p.mesh.position.y <= GROUND_Y;
-            const timedOut      = age >= p.maxDuration;
+            const expired = age >= p.maxDuration
+                || (p.element === 'ice' && p.mesh.position.y <= GROUND_Y)
+                || (p.element === 'lightning' && Vector3.Distance(p.mesh.position, p.spawnPos) >= p.maxRange);
 
-            if (rangeExceeded || groundedIce || timedOut) {
-                p.mesh.dispose();
-                p.light.dispose();
+            if (expired) {
+                p.mesh.dispose(); p.light.dispose();
                 this.projectiles.splice(i, 1);
                 continue;
             }
 
-            // --- hit detection ---
             if (p.grounded) {
-                // Grounded fire: refresh burn on enemies standing in it, no direct damage
+                // Grounded fire: refresh burn on nearby enemies
                 for (const en of enemies) {
                     if (en.hp <= 0) continue;
                     const dist = Vector3.Distance(p.mesh.position, en.root.position.add(new Vector3(0, 1, 0)));
                     if (dist < FIREBALL_HIT_RADIUS) {
-                        en.burnEnd      = now + FIRE_BURN_DURATION;
-                        en.burnDamage   = p.burnDamage;
+                        en.burnEnd = now + FIRE_BURN_DURATION;
+                        en.burnDamage = p.burnDamage;
                     }
                 }
                 continue;
             }
 
-            // Flying hit detection
             let consumed = false;
             for (const en of enemies) {
                 if (en.hp <= 0) continue;
@@ -247,26 +473,23 @@ export class CombatSystem {
                 if (dist >= FIREBALL_HIT_RADIUS) continue;
 
                 if (p.element === 'fire') {
-                    // Fire passes through — direct damage only once per enemy, burn always refreshed
                     if (!p.hitEnemies.has(en)) {
                         p.hitEnemies.add(en);
                         en.hp -= p.damage;
                         en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
                         if (en.hp <= 0) onKill(en);
                     }
-                    en.burnEnd    = now + FIRE_BURN_DURATION;
+                    en.burnEnd = now + FIRE_BURN_DURATION;
                     en.burnDamage = p.burnDamage;
                 } else {
                     en.hp -= p.damage;
                     en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
-
                     if (p.element === 'ice') {
-                        en.slowEnd    = now + ICE_SLOW_DURATION;
+                        en.slowEnd = now + ICE_SLOW_DURATION;
                         en.slowFactor = p.slowFactor;
                     } else {
                         this.applyLightningChains(p, en, enemies, onKill);
                     }
-
                     if (en.hp <= 0) onKill(en);
                     consumed = true;
                     break;
@@ -274,10 +497,11 @@ export class CombatSystem {
             }
 
             if (consumed) {
-                p.mesh.dispose();
-                p.light.dispose();
+                p.mesh.dispose(); p.light.dispose();
                 this.projectiles.splice(i, 1);
             }
         }
+
+        this.updateLiveStages(enemies, onKill);
     }
 }

@@ -59,3 +59,6 @@ export const ICE_SLOW_DURATION = 3000; // ms
 // Lightning chain
 export const LIGHTNING_CHAIN_RANGE = 8;   // units between enemies for each chain jump
 export const LIGHTNING_CHAIN_MULT  = 0.6; // damage fraction per chain jump
+
+// Staged spell system
+export const STAGE_CARRIER_SPEED = 0.3;  // units/frame for 'none' element stages

@@ -60,7 +60,12 @@ function fireSpell(spell: Spell, slotIndex: number): void {
     const forward = player.position.subtract(camera.position);
     forward.y = 0;
     if (forward.length() < 0.01) return;
-    combat.castSpell(player.position, forward.normalize(), spell);
+    const fwd = forward.normalize();
+    if (spell.stages?.length) {
+        combat.castStagedSpell(player.position, fwd, spell);
+    } else {
+        combat.castSpell(player.position, fwd, spell);
+    }
     slotLastCast[slotIndex]   = Date.now();
     slotCooldownMs[slotIndex] = spell.cooldown;
 }
@@ -107,7 +112,9 @@ window.addEventListener('keydown', e => {
     } else {
         casting = { spell, slotIndex, startTime: Date.now(), duration };
         const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
-        castBarLabel.textContent = `Casting ${cap(spell.projectiles[0].element)}… (move to cancel)`;
+        castBarLabel.textContent = spell.stages?.length
+            ? 'Casting Chain… (move to cancel)'
+            : `Casting ${cap(spell.projectiles[0].element)}… (move to cancel)`;
         castBarFill.style.width = '0%';
         castBarEl.style.display = 'block';
     }

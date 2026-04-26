@@ -489,3 +489,102 @@ input[type="number"].sc-number::-webkit-outer-spin-button { -webkit-appearance: 
     font-size: 12px;
     color: #999;
 }
+
+/* ── Stage chain cards ── */
+
+.sc-stage-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 4px;
+}
+
+.sc-stage-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: bold;
+    color: #ccc;
+    margin-bottom: 8px;
+}
+
+.sc-stage-icon { font-style: normal; margin-left: 4px; }
+
+.sc-stage-del {
+    font-size: 11px;
+    padding: 2px 7px;
+    color: #c55;
+    border-color: rgba(200,60,60,0.35);
+}
+.sc-stage-del:hover { color: #f77; border-color: rgba(240,80,80,0.6); }
+
+.sc-stage-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 7px;
+    flex-wrap: wrap;
+}
+
+.sc-stage-lbl {
+    min-width: 52px;
+    font-size: 11px;
+    color: #666;
+    flex-shrink: 0;
+}
+
+.sc-stage-elems { gap: 5px; }
+
+.sc-stage-elem-btn {
+    font-size: 12px;
+    padding: 3px 8px;
+}
+.sc-stage-elem-btn.active {
+    background: rgba(255,255,255,0.14);
+    border-color: rgba(255,255,255,0.45);
+    color: #fff;
+}
+
+.sc-stage-check-lbl {
+    font-size: 12px;
+    color: #888;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sc-stage-connector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    font-size: 12px;
+    color: #666;
+}
+
+.sc-conn-arrow { color: #555; white-space: nowrap; }
+
+.sc-stage-trigger {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 5px;
+    color: #ccc;
+    font-size: 12px;
+    padding: 3px 6px;
+    cursor: pointer;
+}
+.sc-stage-trigger:focus { outline: none; border-color: rgba(255,255,255,0.4); }
+
+.sc-stage-add {
+    display: block;
+    width: 100%;
+    text-align: center;
+    margin-top: 6px;
+    font-size: 12px;
+    padding: 5px 0;
+}
