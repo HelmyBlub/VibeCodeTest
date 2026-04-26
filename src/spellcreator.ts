@@ -136,6 +136,7 @@ export class SpellCreator {
     private activeSlot = 0;
     private stageRoots: StageDraft[] = defaultStageRoots();
     private selectedStagePath: number[] | null = null;
+    private dragSourcePath:   number[] | null = null;
 
     readonly slots: (Spell | null)[] = [null, null, null, null];
     private readonly overlay: HTMLElement;
@@ -193,6 +194,46 @@ export class SpellCreator {
         let node = this.stageRoots[path[0]];
         for (let i = 1; i < path.length - 1; i++) node = node.children[path[i]];
         return node.children;
+    }
+
+    private extractNode(path: number[]): StageDraft {
+        const arr = this.getParentArray(path);
+        return arr.splice(path[path.length - 1], 1)[0];
+    }
+
+    // After removing `removed`, adjust `target` if they share the same parent and removed came before.
+    private adjustPathAfterRemoval(removed: number[], target: number[]): number[] {
+        if (removed.length !== target.length) return target;
+        for (let i = 0; i < removed.length - 1; i++) {
+            if (removed[i] !== target[i]) return target;
+        }
+        const ri = removed[removed.length - 1], ti = target[target.length - 1];
+        return ri < ti ? [...target.slice(0, -1), ti - 1] : target;
+    }
+
+    private moveNode(srcPath: number[], tgtPath: number[], pos: 'before' | 'after' | 'into'): void {
+        const isSelf = tgtPath.length >= srcPath.length && srcPath.every((v, i) => tgtPath[i] === v);
+        if (isSelf) return;
+
+        const node   = this.extractNode(srcPath);
+        const adjTgt = this.adjustPathAfterRemoval(srcPath, tgtPath);
+
+        if (pos === 'into') {
+            const tgt = this.getNode(adjTgt);
+            if (tgt.element !== 'none') return;
+            tgt.children.push(node);
+            this.selectedStagePath = [...adjTgt, tgt.children.length - 1];
+        } else {
+            const arr = this.getParentArray(adjTgt);
+            let idx   = adjTgt[adjTgt.length - 1];
+            if (pos === 'after') idx++;
+            arr.splice(idx, 0, node);
+            this.selectedStagePath = [...adjTgt.slice(0, -1), idx];
+        }
+
+        this.renderStageTree();
+        this.renderStageEditor();
+        this.chainUpdatePreview();
     }
 
     // ── Spell building ────────────────────────────────────────────────────────
@@ -342,7 +383,9 @@ export class SpellCreator {
         if (s.children.length > 0) meta.push(`→${s.children.length}`);
 
         let html = `
-<div class="sc-tree-item${isSel ? ' active' : ''}" style="padding-left:${depth * 14 + 6}px">
+<div class="sc-tree-item${isSel ? ' active' : ''}" style="padding-left:${depth * 14 + 6}px"
+     draggable="true" data-drag-path="${ps}" data-drag-element="${s.element}">
+  <span class="sc-drag-handle">⠿</span>
   <span class="sc-tree-select" data-path="${ps}">${icon} <strong>${label}</strong>${meta.length ? ' <em class="sc-tree-meta">'+meta.join(' · ')+'</em>' : ''}</span>
   ${canDel ? `<button class="sc-btn sc-stage-del" data-path="${ps}">×</button>` : ''}
 </div>`;
@@ -869,6 +912,71 @@ export class SpellCreator {
             if (!ps || t.dataset['stageField'] !== 'stationary') return;
             this.getNode(ps.split(',').map(Number)).stationary = t.checked;
             this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview();
+        });
+
+        // Chain: drag-and-drop reordering
+        let dropEl:  HTMLElement | null = null;
+        let dropPos: 'before' | 'after' | 'into' | null = null;
+
+        const clearDrop = () => {
+            dropEl?.classList.remove('drop-before', 'drop-after', 'drop-into');
+            dropEl = null; dropPos = null;
+        };
+
+        this.stageTreeEl.addEventListener('dragstart', e => {
+            if ((e.target as HTMLElement).closest('button')) { e.preventDefault(); return; }
+            const item = (e.target as HTMLElement).closest<HTMLElement>('[data-drag-path]');
+            if (!item) return;
+            this.dragSourcePath = item.dataset['dragPath']!.split(',').map(Number);
+            item.classList.add('dragging');
+            e.dataTransfer!.effectAllowed = 'move';
+            e.dataTransfer!.setData('text/plain', item.dataset['dragPath']!);
+        });
+
+        this.stageTreeEl.addEventListener('dragend', () => {
+            this.stageTreeEl.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+            clearDrop();
+            this.dragSourcePath = null;
+        });
+
+        this.stageTreeEl.addEventListener('dragover', e => {
+            e.preventDefault();
+            if (!this.dragSourcePath) return;
+            const item = (e.target as HTMLElement).closest<HTMLElement>('[data-drag-path]');
+            if (!item) { clearDrop(); return; }
+
+            const tgtPath = item.dataset['dragPath']!.split(',').map(Number);
+            const isSelf  = tgtPath.length >= this.dragSourcePath.length &&
+                this.dragSourcePath.every((v, i) => tgtPath[i] === v);
+            if (isSelf) { clearDrop(); return; }
+
+            const rect     = item.getBoundingClientRect();
+            const pct      = (e.clientY - rect.top) / rect.height;
+            const canChild = item.dataset['dragElement'] === 'none';
+            const newPos: 'before' | 'after' | 'into' =
+                canChild && pct > 0.33 && pct < 0.67 ? 'into' : pct <= 0.5 ? 'before' : 'after';
+
+            if (item === dropEl && newPos === dropPos) return;
+            clearDrop();
+            dropEl = item; dropPos = newPos;
+            item.classList.add(`drop-${newPos}`);
+            e.dataTransfer!.dropEffect = 'move';
+        });
+
+        this.stageTreeEl.addEventListener('dragleave', e => {
+            if (!this.stageTreeEl.contains(e.relatedTarget as Node)) clearDrop();
+        });
+
+        this.stageTreeEl.addEventListener('drop', e => {
+            e.preventDefault();
+            const item = (e.target as HTMLElement).closest<HTMLElement>('[data-drag-path]');
+            const src  = this.dragSourcePath;
+            const pos  = dropPos;
+            this.stageTreeEl.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+            clearDrop();
+            this.dragSourcePath = null;
+            if (!item || !src || !pos) return;
+            this.moveNode(src, item.dataset['dragPath']!.split(',').map(Number), pos);
         });
     }
 

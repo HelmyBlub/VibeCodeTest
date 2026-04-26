@@ -629,6 +629,26 @@ input[type="number"].sc-number::-webkit-outer-spin-button { -webkit-appearance: 
 }
 .sc-tree-item.active .sc-tree-meta { color: #7a9acc; }
 
+.sc-drag-handle {
+    font-size: 13px;
+    color: #333;
+    flex-shrink: 0;
+    cursor: grab;
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity 0.1s;
+    user-select: none;
+}
+.sc-tree-item:hover .sc-drag-handle { opacity: 1; }
+
+.sc-tree-item.dragging { opacity: 0.35; }
+.sc-tree-item.drop-before { border-top: 2px solid rgba(100,180,255,0.85); }
+.sc-tree-item.drop-after  { border-bottom: 2px solid rgba(100,180,255,0.85); }
+.sc-tree-item.drop-into   {
+    background: rgba(100,150,255,0.18);
+    border-color: rgba(100,150,255,0.55);
+}
+
 /* ── Stage detail editor ── */
 
 .sc-stage-crumb {
