@@ -2,37 +2,40 @@ import {
     ArcRotateCamera, Color3, Color4, Engine, HemisphericLight,
     Mesh, MeshBuilder, Quaternion, Scene, StandardMaterial, Vector3,
 } from '@babylonjs/core';
-import type { SpellElement } from './types';
+import type { StageElement } from './types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export interface ProjVizData {
-    right:   number;
-    up:      number;
-    forward: number;
-    pitch:   number;
-    yaw:     number;
-    element: SpellElement;
-    power:   number;
+export interface StageVizItem {
+    pitch:       number;       // -90 to 90
+    yaw:         number;       // -180 to 180
+    element:     StageElement;
+    stationary:  boolean;
+    count:       number;
+    yawSpread:   number;       // degrees
+    role:        'ancestor' | 'parent' | 'selected' | 'child';
+    childIndex?: number;
 }
 
-export type EditMode = 'none' | 'move' | 'rotate';
+export type EditMode = 'none' | 'rotate';
 
-export type ProjEdits = Partial<{ right: number; up: number; forward: number; pitch: number; yaw: number }>;
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const ELEM_COLOR: Record<SpellElement, [Color3, Color3]> = {
-    fire:      [new Color3(1,    0.4,  0),   new Color3(1,    0.3,  0)],
-    ice:       [new Color3(0,    0.6,  1),   new Color3(0,    0.8,  1)],
-    lightning: [new Color3(1,    0.85, 0.1), new Color3(1,    0.9,  0.2)],
+const ELEM_COLOR: Record<StageElement, Color3> = {
+    fire:      new Color3(1,    0.40, 0.05),
+    ice:       new Color3(0.15, 0.70, 1),
+    lightning: new Color3(1,    0.85, 0.1),
+    none:      new Color3(0.55, 0.55, 0.70),
 };
 
-const BASE_HEIGHT  = 1.2;   // matches combat.ts playerPos + (0, 1.2, 0)
-const ARROW_LEN    = 1.4;
+const ARROW_LEN:  Record<StageVizItem['role'], number> = { ancestor: 1.4, parent: 1.8, selected: 2.8, child: 1.8 };
+const ROLE_ALPHA: Record<StageVizItem['role'], number> = { ancestor: 0.15, parent: 0.38, selected: 1.0, child: 0.60 };
+const SHAFT_DIA:  Record<StageVizItem['role'], number> = { ancestor: 0.040, parent: 0.055, selected: 0.10, child: 0.065 };
+
+const BASE_HEIGHT  = 1.35;
 const CONE_H       = 0.28;
-const MOVE_SENS    = 0.013; // world units per pixel
-const ROTATE_SENS  = 0.35;  // degrees per pixel
+const ROTATE_SENS  = 0.38;
+const MAX_FAN_SHOW = 4;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,12 +44,30 @@ function alignY(mesh: Mesh, dir: Vector3): void {
     if (cross.length() < 0.001) {
         mesh.rotationQuaternion = null;
         mesh.rotation = Vector3.Dot(Vector3.Up(), dir) > 0
-            ? Vector3.Zero()
-            : new Vector3(Math.PI, 0, 0);
+            ? Vector3.Zero() : new Vector3(Math.PI, 0, 0);
     } else {
         const angle = Math.acos(Math.min(1, Math.max(-1, Vector3.Dot(Vector3.Up(), dir))));
         mesh.rotationQuaternion = Quaternion.RotationAxis(cross.normalize(), angle);
     }
+}
+
+function dirVec(pitchDeg: number, yawDeg: number): Vector3 {
+    const pr = pitchDeg * Math.PI / 180;
+    const yr = yawDeg   * Math.PI / 180;
+    return new Vector3(
+        Math.sin(yr) * Math.cos(pr),
+        Math.sin(pr),
+        Math.cos(yr) * Math.cos(pr),
+    ).normalize();
+}
+
+function fanDirs(pitch: number, yaw: number, count: number, yawSpread: number): Vector3[] {
+    const n = Math.min(count, MAX_FAN_SHOW);
+    if (n <= 1) return [dirVec(pitch, yaw)];
+    return Array.from({ length: n }, (_, i) => {
+        const fanYaw = yaw - yawSpread / 2 + (i / (n - 1)) * yawSpread;
+        return dirVec(pitch, fanYaw);
+    });
 }
 
 // ── SpellVisualization ────────────────────────────────────────────────────────
@@ -57,29 +78,28 @@ export class SpellVisualization {
     private readonly cam:     ArcRotateCamera;
     private readonly canvas:  HTMLCanvasElement;
     private readonly disposables: { dispose(): void }[] = [];
-    private readonly meshToProjIdx = new Map<Mesh, number>();
+    private readonly meshToItem   = new Map<Mesh, StageVizItem>();
 
-    private active     = false;
+    private active   = false;
     private editMode: EditMode = 'none';
-    private shiftHeld  = false;
-    private dragging   = false;
-    private lastX      = 0;
-    private lastY      = 0;
+    private dragging = false;
+    private lastX    = 0;
+    private lastY    = 0;
 
-    onProjectileSelected?: (idx: number) => void;
-    onProjectileEdited?:   (edits: ProjEdits) => void;
-    onEditModeChanged?:    (mode: EditMode) => void;
+    onDirectionEdited?: (delta: { pitch: number; yaw: number }) => void;
+    onStageSelected?:   (role: 'parent' | 'child', childIndex?: number) => void;
+    onEditModeChanged?: (mode: EditMode) => void;
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
         this.engine = new Engine(canvas, true, { antialias: true });
         this.scene  = new Scene(this.engine);
-        this.scene.clearColor = new Color4(0.04, 0.04, 0.1, 1);
+        this.scene.clearColor = new Color4(0.04, 0.04, 0.10, 1);
 
-        this.cam = new ArcRotateCamera('vzCam', Math.PI / 3, 1.05, 9, new Vector3(0, 1, 0), this.scene);
+        this.cam = new ArcRotateCamera('vzCam', Math.PI / 4, 1.1, 9, new Vector3(0, 1, 0), this.scene);
         this.cam.attachControl(canvas, true);
-        this.cam.lowerRadiusLimit = 3;
-        this.cam.upperRadiusLimit = 22;
+        this.cam.lowerRadiusLimit = 4;
+        this.cam.upperRadiusLimit = 20;
         this.cam.lowerBetaLimit   = 0.05;
         this.cam.upperBetaLimit   = Math.PI / 2 - 0.02;
 
@@ -89,56 +109,85 @@ export class SpellVisualization {
 
         this.buildStaticMeshes();
         this.bindEvents();
-
         window.addEventListener('resize', () => this.engine.resize());
     }
 
-    // ── Event wiring ─────────────────────────────────────────────────────────
+    // ── Static scene ─────────────────────────────────────────────────────────
+
+    private buildStaticMeshes(): void {
+        const ground = MeshBuilder.CreateGround('vzGround', { width: 10, height: 10, subdivisions: 10 }, this.scene);
+        const gMat = new StandardMaterial('vzGMat', this.scene);
+        gMat.diffuseColor = new Color3(0.10, 0.10, 0.16);
+        gMat.wireframe = true;
+        ground.material = gMat;
+        ground.isPickable = false;
+
+        const bodyMat = new StandardMaterial('vzBodyMat', this.scene);
+        bodyMat.diffuseColor = new Color3(0.32, 0.32, 0.42);
+
+        const body = MeshBuilder.CreateCylinder('vzBody', { height: 1.8, diameter: 0.7, tessellation: 12 }, this.scene);
+        body.position.y = 0.9;
+        body.isPickable = false;
+        body.material   = bodyMat;
+
+        const head = MeshBuilder.CreateSphere('vzHead', { diameter: 0.55 }, this.scene);
+        head.position.y = 2.1;
+        head.isPickable = false;
+        head.material   = bodyMat;
+
+        const noseMat = new StandardMaterial('vzNoseMat', this.scene);
+        noseMat.diffuseColor  = new Color3(0.9, 0.75, 0.1);
+        noseMat.emissiveColor = new Color3(0.35, 0.28, 0);
+        const nose = MeshBuilder.CreateBox('vzNose', { width: 0.1, height: 0.1, depth: 0.35 }, this.scene);
+        nose.position   = new Vector3(0, 1.5, 0.36);
+        nose.isPickable = false;
+        nose.material   = noseMat;
+
+        const fwd = MeshBuilder.CreateLines('vzFwd', {
+            points: [new Vector3(0, 0.02, 0.5), new Vector3(0, 0.02, 4)],
+        }, this.scene);
+        fwd.color      = new Color3(0.7, 0.6, 0.1);
+        fwd.alpha      = 0.22;
+        fwd.isPickable = false;
+    }
+
+    // ── Events ────────────────────────────────────────────────────────────────
 
     private bindEvents(): void {
-        // Click-to-select (only when not in edit mode)
         this.scene.onPointerDown = (_evt, pick) => {
             if (this.editMode !== 'none') return;
             if (pick?.hit && pick.pickedMesh) {
-                const idx = this.meshToProjIdx.get(pick.pickedMesh as Mesh);
-                if (idx !== undefined) this.onProjectileSelected?.(idx);
+                const item = this.meshToItem.get(pick.pickedMesh as Mesh);
+                if (item && item.role !== 'selected')
+                    this.onStageSelected?.(item.role as 'parent' | 'child', item.childIndex);
             }
         };
 
-        // Drag tracking (for edit modes)
         this.canvas.addEventListener('pointerdown', e => {
             this.dragging = true;
-            this.lastX = e.clientX;
-            this.lastY = e.clientY;
+            this.lastX = e.clientX; this.lastY = e.clientY;
         });
         this.canvas.addEventListener('pointermove', e => {
             if (!this.dragging || this.editMode === 'none') return;
-            const dx = e.clientX - this.lastX;
-            const dy = e.clientY - this.lastY;
-            this.lastX = e.clientX;
-            this.lastY = e.clientY;
-            this.applyEdit(dx, dy);
+            const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
+            this.lastX = e.clientX; this.lastY = e.clientY;
+            this.onDirectionEdited?.({ yaw: dx * ROTATE_SENS, pitch: -dy * ROTATE_SENS });
         });
         window.addEventListener('pointerup', () => { this.dragging = false; });
 
-        // Hold G = move position, hold R = rotate direction
         window.addEventListener('keydown', e => {
-            if (!this.active) return;
-            if (e.key === 'Shift') { this.shiftHeld = true; return; }
-            if (this.editMode !== 'none') return;
-            if (e.key === 'g' || e.key === 'G') this.enterEdit('move');
-            if (e.key === 'r' || e.key === 'R') this.enterEdit('rotate');
+            if (!this.active || this.editMode !== 'none') return;
+            if (e.key === 'g' || e.key === 'G' || e.key === 'r' || e.key === 'R') this.enterEdit();
         });
         window.addEventListener('keyup', e => {
-            if (e.key === 'Shift') { this.shiftHeld = false; return; }
             if (e.key === 'g' || e.key === 'G' || e.key === 'r' || e.key === 'R') this.exitEdit();
         });
     }
 
-    private enterEdit(mode: 'move' | 'rotate'): void {
-        this.editMode = mode;
+    private enterEdit(): void {
+        this.editMode = 'rotate';
         this.cam.detachControl();
-        this.onEditModeChanged?.(mode);
+        this.onEditModeChanged?.('rotate');
     }
 
     private exitEdit(): void {
@@ -149,142 +198,117 @@ export class SpellVisualization {
         this.onEditModeChanged?.('none');
     }
 
-    private applyEdit(dx: number, dy: number): void {
-        if (this.editMode === 'move') {
-            if (this.shiftHeld) {
-                this.onProjectileEdited?.({ up: -dy * MOVE_SENS });
-            } else {
-                // Camera-aware using cam.alpha (horizontal orbit angle).
-                // Screen-right in world XZ = (sin α, 0, -cos α)
-                // Screen-down in world XZ = (-cos α, 0, -sin α)  [toward target = into scene]
-                const a = this.cam.alpha;
-                const sinA = Math.sin(a), cosA = Math.cos(a);
-                this.onProjectileEdited?.({
-                    right:   (-sinA * dx + cosA * dy) * MOVE_SENS,
-                    forward: ( cosA * dx + sinA * dy) * MOVE_SENS,
-                });
-            }
-        } else if (this.editMode === 'rotate') {
-            this.onProjectileEdited?.({ yaw: dx * ROTATE_SENS, pitch: -dy * ROTATE_SENS });
-        }
-    }
-
-    // ── Static scene ─────────────────────────────────────────────────────────
-
-    private buildStaticMeshes(): void {
-        const ground = MeshBuilder.CreateGround('vzGround', { width: 8, height: 8, subdivisions: 8 }, this.scene);
-        const gMat   = new StandardMaterial('vzGMat', this.scene);
-        gMat.diffuseColor = new Color3(0.1, 0.1, 0.16);
-        gMat.wireframe    = true;
-        ground.material   = gMat;
-        ground.isPickable = false;
-
-        const bodyMat = new StandardMaterial('vzBodyMat', this.scene);
-        bodyMat.diffuseColor = new Color3(0.32, 0.32, 0.42);
-
-        const body = MeshBuilder.CreateCylinder('vzBody', { height: 1.8, diameter: 0.7, tessellation: 12 }, this.scene);
-        body.position.y  = 0.9;
-        body.isPickable  = false;
-        body.material    = bodyMat;
-
-        const head = MeshBuilder.CreateSphere('vzHead', { diameter: 0.55 }, this.scene);
-        head.position.y  = 2.1;
-        head.isPickable  = false;
-        head.material    = bodyMat;
-
-        // Yellow nose = forward (+Z) indicator
-        const nose    = MeshBuilder.CreateBox('vzNose', { width: 0.1, height: 0.1, depth: 0.35 }, this.scene);
-        nose.position  = new Vector3(0, 1.5, 0.36);
-        nose.isPickable = false;
-        const noseMat = new StandardMaterial('vzNoseMat', this.scene);
-        noseMat.diffuseColor  = new Color3(0.9, 0.75, 0.1);
-        noseMat.emissiveColor = new Color3(0.35, 0.28, 0);
-        nose.material = noseMat;
-
-        const fwd = MeshBuilder.CreateLines('vzFwd', {
-            points: [new Vector3(0, 0.02, 0.5), new Vector3(0, 0.02, 4)],
-        }, this.scene);
-        fwd.color      = new Color3(0.7, 0.6, 0.1);
-        fwd.alpha      = 0.25;
-        fwd.isPickable = false;
-    }
-
     // ── Dynamic update ───────────────────────────────────────────────────────
 
-    update(projs: ProjVizData[], selectedIdx: number): void {
+    update(items: StageVizItem[]): void {
         for (const d of this.disposables) d.dispose();
         this.disposables.length = 0;
-        this.meshToProjIdx.clear();
+        this.meshToItem.clear();
 
-        projs.forEach((p, i) => {
-            const sel = i === selectedIdx;
-            const [diffuse, emissive] = ELEM_COLOR[p.element];
+        const origin = new Vector3(0, BASE_HEIGHT, 0);
 
-            const pos = new Vector3(p.right, BASE_HEIGHT + p.up, p.forward);
+        const ancestors = items.filter(it => it.role === 'ancestor');
+        const parent    = items.find(it => it.role === 'parent');
+        const selected  = items.find(it => it.role === 'selected');
+        const children  = items.filter(it => it.role === 'child');
 
-            // Sphere size scales with power (0.20 → 0.75 diameter)
-            const baseDia = 0.20 + (p.power / 100) * 0.55;
-            const dia     = sel ? baseDia * 1.22 : baseDia;
+        let cur = origin.clone();
+        for (const anc of ancestors) cur = this.buildItem(anc, cur);
 
-            const sphere = MeshBuilder.CreateSphere(`vzS${i}`, { diameter: dia, segments: 8 }, this.scene);
-            sphere.position = pos.clone();
-            const smat = new StandardMaterial(`vzSM${i}`, this.scene);
-            smat.diffuseColor  = diffuse;
-            smat.emissiveColor = sel ? emissive : emissive.scale(0.25);
-            sphere.material = smat;
-            this.disposables.push(sphere, smat);
-            this.meshToProjIdx.set(sphere, i);
+        let selOrigin = cur.clone();
+        if (parent) selOrigin = this.buildItem(parent, cur);
 
-            // Selection ring
-            if (sel) {
-                const ring = MeshBuilder.CreateTorus(
-                    `vzR${i}`, { diameter: dia + 0.45, thickness: 0.055, tessellation: 28 }, this.scene,
-                );
-                ring.position   = pos.clone();
-                ring.isPickable = false;
-                const rmat = new StandardMaterial(`vzRM${i}`, this.scene);
-                rmat.emissiveColor = new Color3(1, 1, 1);
-                ring.material = rmat;
-                this.disposables.push(ring, rmat);
-            }
+        let childOrigin = selOrigin.clone();
+        if (selected) childOrigin = this.buildItem(selected, selOrigin);
 
-            // Direction arrow — shaft starts at sphere surface
-            const pitchRad = (p.pitch * Math.PI) / 180;
-            const yawRad   = (p.yaw   * Math.PI) / 180;
-            const cosP = Math.cos(pitchRad);
-            const dir  = new Vector3(
-                Math.sin(yawRad) * cosP,
-                Math.sin(pitchRad),
-                Math.cos(yawRad) * cosP,
-            ).normalize();
+        for (const child of children) this.buildItem(child, childOrigin);
 
-            const ac         = sel ? new Color3(1, 1, 1) : new Color3(0.5, 0.5, 0.55);
-            const shaftStart = pos.add(dir.scale(dia / 2));
+        this.cam.target.copyFrom(selOrigin);
+    }
 
-            const shaft = MeshBuilder.CreateCylinder(
-                `vzA${i}`, { height: ARROW_LEN, diameter: 0.06, tessellation: 6 }, this.scene,
-            );
-            shaft.position   = shaftStart.add(dir.scale(ARROW_LEN / 2));
-            shaft.isPickable = false;
-            alignY(shaft, dir);
-            const amat = new StandardMaterial(`vzAM${i}`, this.scene);
-            amat.diffuseColor  = ac;
-            amat.emissiveColor = ac.scale(0.3);
-            shaft.material = amat;
-            this.disposables.push(shaft, amat);
+    private buildItem(item: StageVizItem, origin: Vector3): Vector3 {
+        const color    = ELEM_COLOR[item.element];
+        const alpha    = ROLE_ALPHA[item.role];
+        const len      = ARROW_LEN[item.role];
+        const pickable = item.role === 'selected' || item.role === 'child';
+        const tag      = `${item.role}${item.childIndex ?? ''}`;
 
-            const cone = MeshBuilder.CreateCylinder(
-                `vzC${i}`, { height: CONE_H, diameterTop: 0, diameterBottom: 0.18, tessellation: 8 }, this.scene,
-            );
-            cone.position   = shaftStart.add(dir.scale(ARROW_LEN + CONE_H / 2));
-            cone.isPickable = false;
-            alignY(cone, dir);
-            const cmat = new StandardMaterial(`vzCM${i}`, this.scene);
-            cmat.diffuseColor  = ac;
-            cmat.emissiveColor = ac.scale(0.3);
-            cone.material = cmat;
-            this.disposables.push(cone, cmat);
-        });
+        if (item.stationary) {
+            return this.buildBlob(item, origin, color, alpha, len * 0.55, pickable, tag);
+        }
+
+        const dirs = fanDirs(item.pitch, item.yaw, item.count, item.yawSpread);
+        for (let i = 0; i < dirs.length; i++) {
+            this.buildArrow(item, origin, dirs[i], len, color, alpha, pickable, `${tag}_${i}`);
+        }
+
+        if (item.role === 'selected') this.buildSelectionRing(origin);
+        return origin.add(dirs[0].scale(len)); // primary dir endpoint for children
+    }
+
+    private buildArrow(
+        item: StageVizItem, origin: Vector3, dir: Vector3, len: number,
+        color: Color3, alpha: number, pickable: boolean, tag: string,
+    ): void {
+        const shaftLen = len - CONE_H;
+        const emScale  = item.role === 'selected' ? 0.4 : 0.12;
+
+        const shaft = MeshBuilder.CreateCylinder(`vzShaft_${tag}`, {
+            height: shaftLen, diameter: SHAFT_DIA[item.role], tessellation: 8,
+        }, this.scene);
+        shaft.position   = origin.add(dir.scale(shaftLen / 2));
+        shaft.isPickable = pickable;
+        alignY(shaft, dir);
+        const sMat = this.mat(`vzSM_${tag}`, color, alpha, emScale);
+        shaft.material = sMat;
+        this.disposables.push(shaft, sMat);
+        if (pickable) this.meshToItem.set(shaft, item);
+
+        const tip  = origin.add(dir.scale(len));
+        const cone = MeshBuilder.CreateCylinder(`vzCone_${tag}`, {
+            height: CONE_H, diameterTop: 0, diameterBottom: 0.22, tessellation: 8,
+        }, this.scene);
+        cone.position   = tip.subtract(dir.scale(CONE_H / 2));
+        cone.isPickable = pickable;
+        alignY(cone, dir);
+        const cMat = this.mat(`vzCM_${tag}`, color, alpha, emScale);
+        cone.material = cMat;
+        this.disposables.push(cone, cMat);
+        if (pickable) this.meshToItem.set(cone, item);
+    }
+
+    private buildBlob(
+        item: StageVizItem, origin: Vector3, color: Color3, alpha: number,
+        dia: number, pickable: boolean, tag: string,
+    ): Vector3 {
+        const blob = MeshBuilder.CreateSphere(`vzBlob_${tag}`, { diameter: dia, segments: 10 }, this.scene);
+        blob.position   = origin.clone();
+        blob.isPickable = pickable;
+        const bMat = this.mat(`vzBM_${tag}`, color, alpha, item.role === 'selected' ? 0.4 : 0.12);
+        blob.material = bMat;
+        this.disposables.push(blob, bMat);
+        if (pickable) this.meshToItem.set(blob, item);
+
+        if (item.role === 'selected') this.buildSelectionRing(origin);
+        return origin.clone();
+    }
+
+    private buildSelectionRing(pos: Vector3): void {
+        const ring = MeshBuilder.CreateTorus('vzSelRing', { diameter: 0.75, thickness: 0.065, tessellation: 28 }, this.scene);
+        ring.position   = pos.clone();
+        ring.isPickable = false;
+        const rMat = new StandardMaterial('vzRMat', this.scene);
+        rMat.emissiveColor = new Color3(1, 1, 1);
+        ring.material = rMat;
+        this.disposables.push(ring, rMat);
+    }
+
+    private mat(name: string, color: Color3, alpha: number, emScale: number): StandardMaterial {
+        const m = new StandardMaterial(name, this.scene);
+        m.diffuseColor  = color;
+        m.emissiveColor = color.scale(emScale);
+        m.alpha         = alpha;
+        return m;
     }
 
     start(): void { this.active = true;  this.engine.runRenderLoop(() => this.scene.render()); }

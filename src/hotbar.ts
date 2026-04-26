@@ -1,4 +1,13 @@
-import type { Spell, SpellElement } from './types';
+import type { Spell, SpellElement, SpellStage } from './types';
+
+function collectElements(stages: SpellStage[]): SpellElement[] {
+    const out: SpellElement[] = [];
+    for (const s of stages) {
+        if (s.element !== 'none') out.push(s.element as SpellElement);
+        out.push(...collectElements(s.children));
+    }
+    return out;
+}
 
 const ELEMENT_EMOJI: Record<SpellElement, string> = {
     fire:      '🔥',
@@ -38,22 +47,14 @@ export class Hotbar {
             if (spell !== this.prevSpells[i]) {
                 this.prevSpells[i] = spell;
                 if (spell) {
-                    if (spell.stages?.length) {
-                        this.iconEls[i].textContent = '⛓';
-                        this.nameEls[i].textContent = 'Chain';
-                        delete slot.dataset['element'];
-                    } else {
-                        const projs = spell.projectiles;
-                        const firstEl = projs[0].element;
-                        const allSame = projs.every(p => p.element === firstEl);
-                        const displayEl = allSame ? firstEl : null;
-                        this.iconEls[i].textContent = displayEl ? ELEMENT_EMOJI[displayEl] : '✨';
-                        this.nameEls[i].textContent = displayEl
-                            ? displayEl[0].toUpperCase() + displayEl.slice(1)
-                            : 'Mixed';
-                        if (displayEl) slot.dataset['element'] = displayEl;
-                        else delete slot.dataset['element'];
-                    }
+                    const elems  = collectElements(spell.stages ?? []);
+                    const unique = [...new Set(elems)] as SpellElement[];
+                    const single = unique.length === 1;
+                    this.iconEls[i].textContent = elems.length ? unique.map(e => ELEMENT_EMOJI[e]).join('') : '⛓';
+                    this.nameEls[i].textContent = single ? unique[0][0].toUpperCase() + unique[0].slice(1)
+                        : elems.length ? 'Mixed' : 'Chain';
+                    if (single) slot.dataset['element'] = unique[0];
+                    else delete slot.dataset['element'];
                 } else {
                     this.iconEls[i].textContent = '';
                     this.nameEls[i].textContent = '';

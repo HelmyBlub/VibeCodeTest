@@ -651,9 +651,16 @@ input[type="number"].sc-number::-webkit-outer-spin-button { -webkit-appearance: 
 
 /* ── Stage detail editor ── */
 
+.sc-stage-crumb-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
 .sc-stage-crumb {
     font-size: 11px;
     color: #666;
-    margin-bottom: 10px;
     letter-spacing: 0.3px;
 }
