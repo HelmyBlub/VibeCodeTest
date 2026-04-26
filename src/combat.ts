@@ -36,9 +36,7 @@ const STAGE_COLOR: Record<StageElement, [Color3, Color3]> = {
 interface ChainFlash { mesh: Mesh; light: PointLight; life: number; }
 
 interface LiveStage {
-    config:     SpellStage;
-    chain:      SpellStage[];
-    stageIdx:   number;
+    config:     SpellStage;   // children embedded in config.children
     mesh:       Mesh;
     light:      PointLight;
     mat:        StandardMaterial;
@@ -48,6 +46,8 @@ interface LiveStage {
     fired:      boolean;
     hitEnemies: Set<Enemy>;
     grounded:   boolean;
+    spawnPos:   Vector3;  // lightning: range check origin
+    maxRange:   number;   // lightning: dispose distance
 }
 
 // ── CombatSystem ──────────────────────────────────────────────────────────────
@@ -176,20 +176,19 @@ export class CombatSystem {
 
     castStagedSpell(playerPos: Vector3, playerForward: Vector3, spell: Spell): void {
         if (!spell.stages?.length) return;
-        const chain  = spell.stages;
-        const s0     = chain[0];
         const right  = Vector3.Cross(Vector3.Up(), playerForward).normalize();
         const origin = playerPos.add(new Vector3(0, 1.2, 0));
 
-        for (let i = 0; i < s0.count; i++) {
-            const yaw = this.fanYaw(s0.yaw, s0.count, s0.yawSpread, i);
-            const dir = this.pitchYawDir(s0.pitch, yaw, playerForward, right);
-            this.spawnLiveStage(origin.clone(), dir, chain, 0);
+        for (const s0 of spell.stages) {
+            for (let i = 0; i < s0.count; i++) {
+                const yaw = this.fanYaw(s0.yaw, s0.count, s0.yawSpread, i);
+                const dir = this.pitchYawDir(s0.pitch, yaw, playerForward, right);
+                this.spawnLiveStage(origin.clone(), dir, s0);
+            }
         }
     }
 
-    private spawnLiveStage(pos: Vector3, dir: Vector3, chain: SpellStage[], idx: number): void {
-        const cfg             = chain[idx];
+    private spawnLiveStage(pos: Vector3, dir: Vector3, cfg: SpellStage): void {
         const [diffuse, emit] = STAGE_COLOR[cfg.element];
 
         const mat = new StandardMaterial(`stMat`, this.scene);
@@ -211,38 +210,43 @@ export class CombatSystem {
         light.intensity = cfg.stationary ? 0.6 : 1.5;
         light.range     = cfg.stationary ? 5 : 6;
 
-        const vel = cfg.stationary ? Vector3.Zero() : dir.scale(this.stageSpeed(cfg.element));
+        const vel      = cfg.stationary ? Vector3.Zero() : dir.scale(this.stageSpeed(cfg.element));
+        const maxRange = cfg.element === 'lightning'
+            ? LIGHTNING_BASE_RANGE + cfg.power * LIGHTNING_RANGE_POWER
+            : Infinity;
 
         this.liveStages.push({
-            config: cfg, chain, stageIdx: idx,
-            mesh, light, mat, vel,
+            config: cfg, mesh, light, mat, vel,
             spawnTime:  Date.now(),
             lastFire:   Date.now(),
             fired:      false,
             hitEnemies: new Set(),
             grounded:   false,
+            spawnPos:   pos.clone(),
+            maxRange,
         });
     }
 
     private triggerNext(ls: LiveStage): void {
-        const nextIdx = ls.stageIdx + 1;
-        if (nextIdx >= ls.chain.length) return;
-        const next   = ls.chain[nextIdx];
+        const children = ls.config.children;
+        if (!children.length) return;
         const base   = ls.mesh.position.clone();
         const wFwd   = new Vector3(0, 0, 1);
         const wRight = new Vector3(1, 0, 0);
 
-        for (let i = 0; i < next.count; i++) {
-            const spawnPos = base.clone();
-            if (next.spread > 0) {
-                const a = Math.random() * Math.PI * 2;
-                const r = Math.random() * next.spread;
-                spawnPos.x += Math.cos(a) * r;
-                spawnPos.z += Math.sin(a) * r;
+        for (const child of children) {
+            for (let i = 0; i < child.count; i++) {
+                const spawnPos = base.clone();
+                if (child.spread > 0) {
+                    const a = Math.random() * Math.PI * 2;
+                    const r = Math.random() * child.spread;
+                    spawnPos.x += Math.cos(a) * r;
+                    spawnPos.z += Math.sin(a) * r;
+                }
+                const yaw = this.fanYaw(child.yaw, child.count, child.yawSpread, i);
+                const dir = this.pitchYawDir(child.pitch, yaw, wFwd, wRight);
+                this.spawnLiveStage(spawnPos, dir, child);
             }
-            const yaw = this.fanYaw(next.yaw, next.count, next.yawSpread, i);
-            const dir = this.pitchYawDir(next.pitch, yaw, wFwd, wRight);
-            this.spawnLiveStage(spawnPos, dir, ls.chain, nextIdx);
         }
     }
 
@@ -318,35 +322,36 @@ export class CombatSystem {
 
             this.moveStage(ls);
 
-            // Duration expiry
-            if (age >= cfg.duration) {
-                this.disposeLiveStage(ls, i);
-                continue;
-            }
+            if (cfg.element === 'none') {
+                // ── Carrier / relay: trigger logic drives the chain ───────────
+                if ((cfg.stationary || ls.grounded) && age >= cfg.duration) {
+                    this.disposeLiveStage(ls, i); continue;
+                }
+                if (cfg.trigger === 'delay' && !ls.fired && age >= cfg.triggerMs) {
+                    ls.fired = true; this.triggerNext(ls);
+                    this.disposeLiveStage(ls, i); continue;
+                }
+                if (cfg.trigger === 'interval' && now - ls.lastFire >= cfg.triggerMs) {
+                    ls.lastFire = now; this.triggerNext(ls);
+                }
+                if (cfg.trigger === 'impact' && !cfg.stationary && ls.grounded && !ls.fired) {
+                    ls.fired = true; this.triggerNext(ls);
+                    this.disposeLiveStage(ls, i); continue;
+                }
+            } else if (!cfg.stationary) {
+                // ── Elemental projectile: element-specific expiry, no chaining ─
+                if (cfg.element === 'ice' && ls.grounded) {
+                    this.disposeLiveStage(ls, i); continue;
+                }
+                if (cfg.element === 'lightning') {
+                    const traveled = Vector3.Distance(ls.mesh.position, ls.spawnPos);
+                    if (traveled >= ls.maxRange) { this.disposeLiveStage(ls, i); continue; }
+                }
+                if (cfg.element === 'fire' && ls.grounded && age >= cfg.duration) {
+                    this.disposeLiveStage(ls, i); continue;
+                }
 
-            // Trigger logic
-            if (cfg.trigger === 'delay' && !ls.fired && age >= cfg.triggerMs) {
-                ls.fired = true;
-                this.triggerNext(ls);
-                this.disposeLiveStage(ls, i);
-                continue;
-            }
-
-            if (cfg.trigger === 'interval' && now - ls.lastFire >= cfg.triggerMs) {
-                ls.lastFire = now;
-                this.triggerNext(ls);
-                // interval stages stay alive between firings
-            }
-
-            if (cfg.trigger === 'impact' && !ls.config.stationary && ls.grounded && !ls.fired) {
-                ls.fired = true;
-                this.triggerNext(ls);
-                this.disposeLiveStage(ls, i);
-                continue;
-            }
-
-            // Enemy collision — only non-carrier, non-stationary stages
-            if (cfg.element !== 'none' && !cfg.stationary) {
+                // Enemy collision
                 for (const en of enemies) {
                     if (en.hp <= 0 || ls.hitEnemies.has(en)) continue;
                     const dist = Vector3.Distance(
@@ -360,13 +365,8 @@ export class CombatSystem {
                     en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
                     this.applyStageHitEffect(ls, en, enemies, onKill, now);
                     if (en.hp <= 0) onKill(en);
-
-                    if (cfg.trigger === 'impact' && !ls.fired) {
-                        ls.fired = true;
-                        this.triggerNext(ls);
-                        this.disposeLiveStage(ls, i);
-                        break;
-                    }
+                    // lightning stops on first hit; fire/ice pass through
+                    if (cfg.element === 'lightning') { this.disposeLiveStage(ls, i); break; }
                 }
             }
         }

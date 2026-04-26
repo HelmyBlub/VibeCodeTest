@@ -48,9 +48,10 @@ export interface SpellStage {
     stationary: boolean;    // area/cloud vs flying projectile
     trigger:    StageTrigger;
     triggerMs:  number;     // ms for delay period or interval period
-    duration:   number;     // total stage lifetime ms
+    duration:   number;     // total stage lifetime ms (stationary only)
     damage:     number;     // computed at spell-build time
     burnDamage: number;     // computed at spell-build time
+    children:   SpellStage[]; // sub-stages this stage fires when its trigger activates
 }
 
 export interface ProjectileConfig {
