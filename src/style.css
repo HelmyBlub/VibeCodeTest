@@ -588,3 +588,52 @@ input[type="number"].sc-number::-webkit-outer-spin-button { -webkit-appearance: 
     font-size: 12px;
     padding: 5px 0;
 }
+
+/* ── Stage tree (compact master list) ── */
+
+.sc-tree-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    padding: 4px 6px;
+    margin-bottom: 2px;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+}
+.sc-tree-item:hover { background: rgba(255,255,255,0.05); }
+.sc-tree-item.active {
+    background: rgba(100,150,255,0.13);
+    border-color: rgba(100,150,255,0.40);
+}
+
+.sc-tree-select {
+    flex: 1;
+    font-size: 13px;
+    color: #ccc;
+    cursor: pointer;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: none;
+}
+.sc-tree-item.active .sc-tree-select { color: #c8d8ff; }
+
+.sc-tree-meta {
+    font-size: 11px;
+    color: #555;
+    font-style: normal;
+}
+.sc-tree-item.active .sc-tree-meta { color: #7a9acc; }
+
+/* ── Stage detail editor ── */
+
+.sc-stage-crumb {
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 10px;
+    letter-spacing: 0.3px;
+}
