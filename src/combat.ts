@@ -50,6 +50,7 @@ interface LiveStage {
     grounded:   boolean;
     spawnPos:   Vector3;  // lightning: range check origin
     maxRange:   number;   // lightning: dispose distance
+    initDir:    Vector3;  // world-space direction at spawn, used as forward reference for children
 }
 
 // ── CombatSystem ──────────────────────────────────────────────────────────────
@@ -231,24 +232,30 @@ export class CombatSystem {
             grounded:   false,
             spawnPos:   pos.clone(),
             maxRange,
+            initDir:    dir.clone(),
         });
     }
 
     private triggerNext(ls: LiveStage): void {
         const children = ls.config.children;
         if (!children.length) return;
-        const base   = ls.mesh.position.clone();
-        const wFwd   = new Vector3(0, 0, 1);
-        const wRight = new Vector3(1, 0, 0);
+        const base = ls.mesh.position.clone();
+
+        // use parent's spawn direction as forward so child pitch/yaw are parent-relative
+        const fwd    = ls.initDir.clone();
+        const cross  = Vector3.Cross(Vector3.Up(), fwd);
+        const cross2 = Vector3.Cross(new Vector3(0, 0, 1), fwd);
+        const right  = cross.length()  > 0.001 ? cross.normalize()  :
+                       cross2.length() > 0.001 ? cross2.normalize() : new Vector3(-1, 0, 0);
 
         for (const child of children) {
             // cloud.count means tick count, not simultaneous spawns — always spawn one cloud
             const spawnCount = child.element === 'cloud' ? 1 : child.count;
             for (let i = 0; i < spawnCount; i++) {
                 const spawnPos = base.clone();
-                spawnPos.x += child.offsetX ?? 0;
-                spawnPos.y += child.offsetY ?? 0;
-                spawnPos.z += child.offsetZ ?? 0;
+                spawnPos.addInPlace(right.scale(child.offsetX ?? 0));
+                spawnPos.addInPlace(Vector3.Up().scale(child.offsetY ?? 0));
+                spawnPos.addInPlace(fwd.scale(child.offsetZ ?? 0));
                 if (child.spread > 0) {
                     const a = Math.random() * Math.PI * 2;
                     const r = Math.random() * child.spread;
@@ -256,7 +263,7 @@ export class CombatSystem {
                     spawnPos.z += Math.sin(a) * r;
                 }
                 const yaw = this.fanYaw(child.yaw, child.count, child.yawSpread, i);
-                const dir = this.pitchYawDir(child.pitch, yaw, wFwd, wRight);
+                const dir = this.pitchYawDir(child.pitch, yaw, fwd, right);
                 this.spawnLiveStage(spawnPos, dir, child);
             }
         }
@@ -394,8 +401,9 @@ export class CombatSystem {
         const pr = pitchDeg * Math.PI / 180;
         const yr = yawDeg   * Math.PI / 180;
         const cosP = Math.cos(pr);
+        const localUp = Vector3.Cross(forward, right).normalize();
         return right.scale(Math.sin(yr) * cosP)
-            .add(Vector3.Up().scale(Math.sin(pr)))
+            .add(localUp.scale(Math.sin(pr)))
             .add(forward.scale(Math.cos(yr) * cosP))
             .normalize();
     }

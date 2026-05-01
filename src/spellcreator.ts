@@ -220,7 +220,7 @@ export class SpellCreator {
     private toVizItem(s: StageDraft, role: StageVizItem['role'], childIndex?: number): StageVizItem {
         return { pitch: s.pitch, yaw: s.yaw, element: s.element,
                  stationary: s.stationary, count: s.count, yawSpread: s.yawSpread,
-                 trigger: s.trigger, triggerMs: s.triggerMs, role, childIndex,
+                 power: s.power, trigger: s.trigger, triggerMs: s.triggerMs, role, childIndex,
                  offsetX: s.offsetX, offsetY: s.offsetY, offsetZ: s.offsetZ };
     }
 
@@ -681,7 +681,8 @@ export class SpellCreator {
             const s  = this.getNode(this.selectedStagePath);
             const ps = this.selectedStagePath.join(',');
             s.pitch = Math.max(-90,  Math.min(90,  s.pitch + delta.pitch));
-            s.yaw   = Math.max(-180, Math.min(180, s.yaw   + delta.yaw));
+            const rawYaw = s.yaw + delta.yaw;
+            s.yaw = ((rawYaw + 180) % 360 + 360) % 360 - 180;
             // sync editor inputs in-place so the DOM doesn't rebuild mid-drag
             const setField = (field: string, val: string) => {
                 const el = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="${field}"]`);

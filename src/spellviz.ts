@@ -1,8 +1,12 @@
 import {
     ArcRotateCamera, Color3, Color4, Engine, HemisphericLight,
-    Mesh, MeshBuilder, Quaternion, Scene, StandardMaterial, Vector3,
+    LinesMesh, Mesh, MeshBuilder, Quaternion, Scene, StandardMaterial, Vector3,
 } from '@babylonjs/core';
 import type { StageElement, StageTrigger } from './types';
+import {
+    FIRE_GRAVITY, FIRE_MAX_DURATION, FIRE_MIN_DURATION, FIRE_SPEED,
+    ICE_DRAG, ICE_FALL_RATE, ICE_MAX_DURATION, ICE_MAX_FALL_SPEED, ICE_SPEED,
+} from './constants';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +19,7 @@ export interface StageVizItem {
     yawSpread:   number;       // degrees
     role:        'ancestor' | 'parent' | 'selected' | 'sibling' | 'child';
     childIndex?: number;
+    power:       number;
     trigger:     StageTrigger;
     triggerMs:   number;
     offsetX:     number;
@@ -64,23 +69,83 @@ function alignY(mesh: Mesh, dir: Vector3): void {
     }
 }
 
-function dirVec(pitchDeg: number, yawDeg: number): Vector3 {
+// Same math as combat's pitchYawDir — direction relative to an explicit forward/right frame.
+function pitchYawDirVec(pitchDeg: number, yawDeg: number, fwd: Vector3, right: Vector3): Vector3 {
     const pr = pitchDeg * Math.PI / 180;
     const yr = yawDeg   * Math.PI / 180;
-    return new Vector3(
-        Math.sin(yr) * Math.cos(pr),
-        Math.sin(pr),
-        Math.cos(yr) * Math.cos(pr),
-    ).normalize();
+    const cosP = Math.cos(pr);
+    // Use local up (Cross(fwd, right)) so pitch stays well-defined even when fwd is vertical.
+    // For horizontal fwd this equals world Up; for vertical fwd it avoids gimbal lock.
+    const localUp = Vector3.Cross(fwd, right).normalize();
+    return right.scale(Math.sin(yr) * cosP)
+        .add(localUp.scale(Math.sin(pr)))
+        .add(fwd.scale(Math.cos(yr) * cosP))
+        .normalize();
 }
 
-function fanDirs(pitch: number, yaw: number, count: number, yawSpread: number): Vector3[] {
+function fanDirs(pitch: number, yaw: number, count: number, yawSpread: number, fwd: Vector3, right: Vector3): Vector3[] {
     const n = Math.min(count, MAX_FAN_SHOW);
-    if (n <= 1) return [dirVec(pitch, yaw)];
+    if (n <= 1) return [pitchYawDirVec(pitch, yaw, fwd, right)];
     return Array.from({ length: n }, (_, i) => {
         const fanYaw = yaw - yawSpread / 2 + (i / (n - 1)) * yawSpread;
-        return dirVec(pitch, fanYaw);
+        return pitchYawDirVec(pitch, fanYaw, fwd, right);
     });
+}
+
+function deriveRight(fwd: Vector3, fallback: Vector3): Vector3 {
+    const cross = Vector3.Cross(Vector3.Up(), fwd);
+    if (cross.length() > 0.001) return cross.normalize();
+    const cross2 = Vector3.Cross(new Vector3(0, 0, 1), fwd);
+    return cross2.length() > 0.001 ? cross2.normalize() : fallback;
+}
+
+// Rotate v around a unit axis by angle radians (Rodrigues formula).
+function rotateVec(v: Vector3, axis: Vector3, angle: number): Vector3 {
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const dot = Vector3.Dot(axis, v);
+    return v.scale(cos).add(Vector3.Cross(axis, v).scale(sin)).add(axis.scale(dot * (1 - cos)));
+}
+
+// ── Trajectory simulation ─────────────────────────────────────────────────────
+
+const TRAJ_SAMPLE = 3; // simulate every N frames, giving a smooth curve without thousands of points
+
+function simulateTrajectory(
+    element: 'fire' | 'ice',
+    pitchDeg: number, yawDeg: number,
+    power: number,
+    origin: Vector3,
+    fwd: Vector3, right: Vector3,
+): Vector3[] {
+    const dir   = pitchYawDirVec(pitchDeg, yawDeg, fwd, right);
+    const speed = element === 'fire' ? FIRE_SPEED : ICE_SPEED;
+    let vx = dir.x * speed;
+    let vy = dir.y * speed;
+    let vz = dir.z * speed;
+    let px = origin.x, py = origin.y, pz = origin.z;
+
+    const t = power / 100;
+    const maxFrames = element === 'fire'
+        ? Math.round((FIRE_MIN_DURATION + t * (FIRE_MAX_DURATION - FIRE_MIN_DURATION)) * 60 / 1000)
+        : Math.round(ICE_MAX_DURATION * 60 / 1000);
+
+    const pts: Vector3[] = [new Vector3(px, py, pz)];
+    for (let f = 1; f <= maxFrames; f++) {
+        if (element === 'fire') {
+            vy += FIRE_GRAVITY;
+        } else {
+            vy  = Math.max(-ICE_MAX_FALL_SPEED, vy - ICE_FALL_RATE);
+            vx *= ICE_DRAG;
+            vz *= ICE_DRAG;
+        }
+        px += vx; py += vy; pz += vz;
+
+        if (py <= 0) { pts.push(new Vector3(px, 0, pz)); break; }
+        if (f % TRAJ_SAMPLE === 0) pts.push(new Vector3(px, py, pz));
+    }
+    // guarantee at least 2 points so CreateLines doesn't fail
+    if (pts.length < 2) pts.push(new Vector3(px, Math.max(0, py), pz));
+    return pts;
 }
 
 // ── SpellVisualization ────────────────────────────────────────────────────────
@@ -99,6 +164,13 @@ export class SpellVisualization {
     private lastX      = 0;
     private lastY      = 0;
     private gKeyHeld   = false;
+
+    // Parent frame of the currently selected stage — updated each update() call
+    // so the rotate drag can always work in world space.
+    private selPitch       = 0;
+    private selYaw         = 0;
+    private selParentFwd   = new Vector3(0, 0, 1);
+    private selParentRight = new Vector3(1, 0, 0);
 
     onDirectionEdited?: (delta: { pitch: number; yaw: number }) => void;
     onPositionEdited?:  (delta: { x: number; y: number; z: number }) => void;
@@ -187,7 +259,23 @@ export class SpellVisualization {
             const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
             this.lastX = e.clientX; this.lastY = e.clientY;
             if (this.editMode === 'rotate') {
-                this.onDirectionEdited?.({ yaw: dx * ROTATE_SENS, pitch: -dy * ROTATE_SENS });
+                const SENS = ROTATE_SENS * Math.PI / 180;
+                // Current world-space direction of the selected stage
+                const D = pitchYawDirVec(this.selPitch, this.selYaw, this.selParentFwd, this.selParentRight);
+                // 1. Horizontal drag → rotate around world Y (changes compass direction)
+                const D1 = rotateVec(D, new Vector3(0, 1, 0), dx * SENS);
+                // 2. Vertical drag → change world elevation
+                //    Elevation axis = Cross(horizontal component of D1, worldY) — always tilts toward/away from world up
+                const Dh = new Vector3(D1.x, 0, D1.z);
+                const elevAxis = Dh.length() > 0.001
+                    ? Vector3.Cross(Dh.normalize(), new Vector3(0, 1, 0))
+                    : new Vector3(1, 0, 0); // fallback when D1 is nearly vertical
+                const D2 = rotateVec(D1, elevAxis, -dy * SENS);
+                // 3. Decompose D2 back to parent-relative pitch/yaw
+                const localUp = Vector3.Cross(this.selParentFwd, this.selParentRight).normalize();
+                const newPitch = Math.asin(Math.max(-1, Math.min(1, Vector3.Dot(D2, localUp)))) * 180 / Math.PI;
+                const newYaw   = Math.atan2(Vector3.Dot(D2, this.selParentRight), Vector3.Dot(D2, this.selParentFwd)) * 180 / Math.PI;
+                this.onDirectionEdited?.({ pitch: newPitch - this.selPitch, yaw: newYaw - this.selYaw });
             } else if (this.editMode === 'moveH') {
                 // camera-aware: map screen dx/dy to world XZ using camera's horizontal orientation
                 const cx = this.cam.target.x - this.cam.position.x;
@@ -257,38 +345,68 @@ export class SpellVisualization {
         const siblings  = items.filter(it => it.role === 'sibling');
         const children  = items.filter(it => it.role === 'child');
 
+        // chain fwd/right through each level, matching combat's pitchYawDir logic
+        const WFW = new Vector3(0, 0, 1);
+        const WRT = new Vector3(1, 0, 0);
+
         let cur = origin.clone();
+        let curFwd = WFW.clone(), curRight = WRT.clone();
         for (const anc of ancestors) {
             const o = cur.add(new Vector3(anc.offsetX, anc.offsetY, anc.offsetZ));
-            cur = this.buildItem(anc, o);
+            const { endpoint, primaryDir } = this.buildItem(anc, o, curFwd, curRight);
+            cur = endpoint;
+            curFwd  = primaryDir;
+            curRight = deriveRight(curFwd, curRight);
         }
 
         let selOrigin = cur.clone();
+        let selFwd = curFwd.clone(), selRight = curRight.clone();
         if (parent) {
             const o = cur.add(new Vector3(parent.offsetX, parent.offsetY, parent.offsetZ));
-            selOrigin = this.buildItem(parent, o);
+            const { endpoint, primaryDir } = this.buildItem(parent, o, curFwd, curRight);
+            selOrigin = endpoint;
+            selFwd    = primaryDir;
+            selRight  = deriveRight(selFwd, curRight);
         }
 
+        // siblings share the same reference frame as the selected (both are children of parent)
         for (const sib of siblings) {
             const o = selOrigin.add(new Vector3(sib.offsetX, sib.offsetY, sib.offsetZ));
-            this.buildItem(sib, o);
+            this.buildItem(sib, o, selFwd, selRight);
+        }
+
+        // Capture the selected stage's parent frame for world-space drag editing.
+        if (selected) {
+            this.selPitch       = selected.pitch;
+            this.selYaw         = selected.yaw;
+            this.selParentFwd   = selFwd.clone();
+            this.selParentRight = selRight.clone();
         }
 
         let childOrigin = selOrigin.clone();
+        let childFwd = selFwd.clone(), childRight = selRight.clone();
         if (selected) {
             const o = selOrigin.add(new Vector3(selected.offsetX, selected.offsetY, selected.offsetZ));
-            childOrigin = this.buildItem(selected, o);
+            const { endpoint, primaryDir } = this.buildItem(selected, o, selFwd, selRight);
+            childOrigin = endpoint;
+            childFwd    = primaryDir;
+            childRight  = deriveRight(childFwd, selRight);
         }
 
         for (const child of children) {
             const o = childOrigin.add(new Vector3(child.offsetX, child.offsetY, child.offsetZ));
-            this.buildItem(child, o);
+            this.buildItem(child, o, childFwd, childRight);
         }
 
         this.cam.target.copyFrom(selOrigin);
     }
 
-    private buildItem(item: StageVizItem, origin: Vector3): Vector3 {
+    // Returns the chain endpoint and the primary direction used, so the caller can thread
+    // the reference frame to the next level (matching combat's parent-relative pitchYawDir).
+    private buildItem(
+        item: StageVizItem, origin: Vector3,
+        fwd: Vector3, right: Vector3,
+    ): { endpoint: Vector3; primaryDir: Vector3 } {
         const color    = ELEM_COLOR[item.element];
         const alpha    = ROLE_ALPHA[item.role];
         const isCarrierDelay = item.element === 'carrier' && item.trigger === 'delay';
@@ -299,10 +417,18 @@ export class SpellVisualization {
         const tag      = `${item.role}${item.childIndex ?? ''}`;
 
         if (item.stationary) {
-            return this.buildBlob(item, origin, color, alpha, len * 0.55, pickable, tag);
+            const endpoint = this.buildBlob(item, origin, color, alpha, len * 0.55, pickable, tag);
+            // stationary stages pass their own direction to children (cloud inherits parent fwd unchanged)
+            const primaryDir = pitchYawDirVec(item.pitch, item.yaw, fwd, right);
+            return { endpoint, primaryDir };
         }
 
-        const dirs = fanDirs(item.pitch, item.yaw, item.count, item.yawSpread);
+        // fire and ice follow curved trajectories — simulate physics instead of a straight arrow
+        if (item.element === 'fire' || item.element === 'ice') {
+            return this.buildTrajectoryItem(item, origin, color, alpha, pickable, tag, fwd, right);
+        }
+
+        const dirs = fanDirs(item.pitch, item.yaw, item.count, item.yawSpread, fwd, right);
         for (let i = 0; i < dirs.length; i++) {
             this.buildArrow(item, origin, dirs[i], len, color, alpha, pickable, `${tag}_${i}`);
         }
@@ -317,7 +443,53 @@ export class SpellVisualization {
         if (pickable) this.meshToItem.set(dot, item);
 
         if (item.role === 'selected') this.buildSelectionRing(origin);
-        return origin.add(dirs[0].scale(len)); // primary dir endpoint for children
+        return { endpoint: origin.add(dirs[0].scale(len)), primaryDir: dirs[0] };
+    }
+
+    private buildTrajectoryItem(
+        item: StageVizItem, origin: Vector3,
+        color: Color3, alpha: number, pickable: boolean, tag: string,
+        fwd: Vector3, right: Vector3,
+    ): { endpoint: Vector3; primaryDir: Vector3 } {
+        const n = Math.min(item.count, MAX_FAN_SHOW);
+        let primaryLanding = origin.clone();
+
+        for (let fi = 0; fi < n; fi++) {
+            const fanYaw = n <= 1 ? item.yaw
+                : item.yaw - item.yawSpread / 2 + (fi / (n - 1)) * item.yawSpread;
+            const pts = simulateTrajectory(item.element as 'fire' | 'ice', item.pitch, fanYaw, item.power, origin, fwd, right);
+            if (fi === 0) primaryLanding = pts[pts.length - 1].clone();
+
+            const line = MeshBuilder.CreateLines(`vzTraj_${tag}_${fi}`, { points: pts }, this.scene) as LinesMesh;
+            line.color      = color;
+            line.alpha      = alpha;
+            line.isPickable = false; // too thin to click reliably
+            this.disposables.push(line);
+        }
+
+        // landing marker at primary endpoint
+        const lx = primaryLanding.x, lz = primaryLanding.z;
+        const ring = MeshBuilder.CreateTorus(`vzLand_${tag}`, { diameter: 0.55, thickness: 0.06, tessellation: 20 }, this.scene);
+        ring.position   = new Vector3(lx, 0.02, lz);
+        ring.isPickable = pickable;
+        const rMat = this.mat(`vzRM_${tag}`, color, alpha, DOT_EM[item.role]);
+        ring.material   = rMat;
+        this.disposables.push(ring, rMat);
+        if (pickable) this.meshToItem.set(ring, item);
+
+        // spawn-point dot
+        const dot  = MeshBuilder.CreateSphere(`vzDot_${tag}`, { diameter: DOT_DIA[item.role], segments: 6 }, this.scene);
+        dot.position   = origin.clone();
+        dot.isPickable = pickable;
+        const dMat = this.mat(`vzDM_${tag}`, color, alpha, DOT_EM[item.role]);
+        dot.material   = dMat;
+        this.disposables.push(dot, dMat);
+        if (pickable) this.meshToItem.set(dot, item);
+
+        if (item.role === 'selected') this.buildSelectionRing(origin);
+        const toEnd = primaryLanding.subtract(origin);
+        const primaryDir = toEnd.length() > 0.001 ? toEnd.normalize() : fwd;
+        return { endpoint: primaryLanding, primaryDir };
     }
 
     private buildArrow(
