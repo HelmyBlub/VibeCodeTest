@@ -30,7 +30,8 @@ interface StageDraft {
     yawSpread:    number;
     stationary:   boolean;
     trigger:      StageTrigger;
-    triggerMs:    number;
+    triggerMs:    number;   // carrier: delay ms
+    intervalMs:   number;   // cloud: tick interval ms
     duration:     number;
     burnDuration: number;   // fire: DoT duration ms
     slowPercent:  number;   // ice: slow % 0–90
@@ -50,7 +51,7 @@ function fmt1(n: number): string { return (Math.round(n * 10) / 10).toFixed(1); 
 
 function defaultStageDraft(): StageDraft {
     return { element: 'carrier', power: 50, pitch: 45, yaw: 0, count: 1, spread: 0, yawSpread: 0,
-             stationary: false, trigger: 'delay', triggerMs: 1500, duration: 3000,
+             stationary: false, trigger: 'delay', triggerMs: 500, intervalMs: 1000, duration: 3000,
              burnDuration: 3000, slowPercent: 50, jumpCount: 2,
              offsetX: 0, offsetY: 0, offsetZ: 0, children: [] };
 }
@@ -58,7 +59,7 @@ function defaultStageDraft(): StageDraft {
 function defaultStageRoots(): StageDraft[] {
     return [{
         element: 'fire', power: 50, pitch: 0, yaw: 0, count: 1, spread: 0, yawSpread: 0,
-        stationary: false, trigger: 'delay', triggerMs: 1500, duration: 3000,
+        stationary: false, trigger: 'delay', triggerMs: 500, intervalMs: 1000, duration: 3000,
         burnDuration: 3000, slowPercent: 50, jumpCount: 2,
         offsetX: 0, offsetY: 0, offsetZ: 0, children: [],
     }];
@@ -69,7 +70,9 @@ function draftToStage(d: StageDraft, cooldown: number, castTime: number): SpellS
     return {
         element: d.element, power: d.power, pitch: d.pitch, yaw: d.yaw,
         count: d.count, spread: d.spread, yawSpread: d.yawSpread,
-        stationary, trigger: d.trigger, triggerMs: d.triggerMs, duration: d.duration,
+        stationary, trigger: d.trigger,
+        triggerMs: d.element === 'cloud' ? d.intervalMs : d.triggerMs,
+        duration: d.duration,
         damage:       d.element !== 'carrier' && d.element !== 'cloud' ? calcDamage(d.power, cooldown) : 0,
         burnDamage:   d.element === 'fire'  ? calcBurnDamage(d.power, cooldown) : 0,
         burnDuration: d.element === 'fire'      ? d.burnDuration : undefined,
@@ -88,7 +91,10 @@ function stageToDraft(s: SpellStage): StageDraft {
     return {
         element, power: s.power, pitch: s.pitch, yaw: s.yaw,
         count: s.count, spread: s.spread, yawSpread: s.yawSpread,
-        stationary: s.stationary, trigger: s.trigger, triggerMs: s.triggerMs, duration: s.duration,
+        stationary: s.stationary, trigger: s.trigger,
+        triggerMs:  element !== 'cloud' ? (s.triggerMs ?? 500)  : 500,
+        intervalMs: element === 'cloud' ? (s.triggerMs ?? 1000) : 1000,
+        duration: s.duration,
         burnDuration: s.burnDuration ?? 3000,
         slowPercent:  s.slowPercent  ?? 50,
         jumpCount:    s.jumpCount    ?? 2,
@@ -228,6 +234,16 @@ export class SpellCreator {
                 items.push(this.toVizItem(this.getNode(path.slice(0, len)), 'ancestor'));
             if (path.length > 1)
                 items.push(this.toVizItem(this.getNode(path.slice(0, -1)), 'parent'));
+            // siblings: other children of same parent (or other root stages)
+            if (path.length === 1) {
+                for (let i = 0; i < this.stageRoots.length; i++)
+                    if (i !== path[0]) items.push(this.toVizItem(this.stageRoots[i], 'sibling', i));
+            } else {
+                const parentNode = this.getNode(path.slice(0, -1));
+                parentNode.children.forEach((c, i) => {
+                    if (i !== path[path.length - 1]) items.push(this.toVizItem(c, 'sibling', i));
+                });
+            }
             const sel = this.getNode(path);
             items.push(this.toVizItem(sel, 'selected'));
             sel.children.forEach((c, i) => items.push(this.toVizItem(c, 'child', i)));
@@ -337,7 +353,7 @@ export class SpellCreator {
         if (s.element === 'carrier' && s.children.length > 0)
             meta.push(s.trigger === 'delay' ? `d:${fmt1(s.triggerMs/1000)}s` : 'on hit');
         if (s.element === 'cloud' && s.children.length > 0)
-            meta.push(`×${s.count}/${s.triggerMs}ms = ${fmt1(s.count * s.triggerMs / 1000)}s`);
+            meta.push(`×${s.count}/${s.intervalMs}ms = ${fmt1(s.count * s.intervalMs / 1000)}s`);
         if (s.children.length > 0) meta.push(`→${s.children.length}`);
 
         let html = `
@@ -407,8 +423,8 @@ export class SpellCreator {
 </div>
 <div class="sc-stage-inline">
   <span class="sc-stage-lbl">Interval</span>
-  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="triggerMs" min="100" max="10000" step="100" value="${s.triggerMs}">
-  <span class="sc-unit">ms · ${fmt1(s.count * s.triggerMs / 1000)} s total</span>
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="intervalMs" min="100" max="10000" step="100" value="${s.intervalMs}">
+  <span class="sc-unit">ms · ${fmt1(s.count * s.intervalMs / 1000)} s total</span>
 </div>
 <div class="sc-stage-connector">
   <span class="sc-conn-arrow">▼ each tick</span>
@@ -508,6 +524,10 @@ export class SpellCreator {
                 s.triggerMs = num(100, 10000, true);
                 this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
             }
+            case 'intervalMs': {
+                s.intervalMs = num(100, 10000, true);
+                this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+            }
             case 'jumpCount':  s.jumpCount = num(0, 8); break;
             case 'offsetX': { s.offsetX = Math.max(-1.5, Math.min(1.5, parseFloat(value) || 0)); this.chainUpdatePreview(); return; }
             case 'offsetY': { s.offsetY = Math.max(-1.5, Math.min(1.5, parseFloat(value) || 0)); this.chainUpdatePreview(); return; }
@@ -560,7 +580,7 @@ export class SpellCreator {
                 const dmg  = !isStaging ? ` · ${calcDamage(s.power, this.cooldown)} dmg` : '';
                 const trig = isStaging && s.children.length
                     ? (s.element === 'cloud'
-                        ? ` → ×${s.count} / ${s.triggerMs}ms`
+                        ? ` → ×${s.count} / ${s.intervalMs}ms`
                         : ` → ${s.trigger}${s.trigger !== 'impact' ? ' '+s.triggerMs+'ms' : ''}`)
                     : '';
                 lines.push(`<span class="sc-proj-preview-item">${pad}${icon} ${this.stageLabel(s)}${s.count>1?' ×'+s.count:''}${dmg}${trig}</span>`);
@@ -675,8 +695,11 @@ export class SpellCreator {
 
         this.viz.onStageSelected = (role, childIndex) => {
             if (!this.selectedStagePath) return;
-            if (role === 'parent' && this.selectedStagePath.length > 1) {
-                this.selectedStagePath = this.selectedStagePath.slice(0, -1);
+            if (role === 'parent') {
+                if (this.selectedStagePath.length > 1)
+                    this.selectedStagePath = this.selectedStagePath.slice(0, -1);
+            } else if (role === 'sibling' && childIndex !== undefined) {
+                this.selectedStagePath = [...this.selectedStagePath.slice(0, -1), childIndex];
             } else if (role === 'child' && childIndex !== undefined) {
                 const sel = this.getNode(this.selectedStagePath);
                 if (childIndex < sel.children.length)

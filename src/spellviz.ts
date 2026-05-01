@@ -13,7 +13,7 @@ export interface StageVizItem {
     stationary:  boolean;
     count:       number;
     yawSpread:   number;       // degrees
-    role:        'ancestor' | 'parent' | 'selected' | 'child';
+    role:        'ancestor' | 'parent' | 'selected' | 'sibling' | 'child';
     childIndex?: number;
     trigger:     StageTrigger;
     triggerMs:   number;
@@ -34,13 +34,15 @@ const ELEM_COLOR: Record<StageElement, Color3> = {
     cloud:     new Color3(0.40, 0.70, 0.90),
 };
 
-const ARROW_LEN:  Record<StageVizItem['role'], number> = { ancestor: 1.4, parent: 1.8, selected: 2.8, child: 1.8 };
+const ARROW_LEN:  Record<StageVizItem['role'], number> = { ancestor: 1.4, parent: 1.8, selected: 2.8, sibling: 1.8, child: 1.8 };
 // STAGE_CARRIER_SPEED (0.3 u/frame) ÷ 16.67 (ms/frame at 60fps) = actual game units per ms
 const CARRIER_MS_TO_LEN = 0.018;
 const CARRIER_MIN_LEN   = 0.3;
 const CARRIER_MAX_LEN   = 60;
-const ROLE_ALPHA: Record<StageVizItem['role'], number> = { ancestor: 0.15, parent: 0.38, selected: 1.0, child: 0.60 };
-const SHAFT_DIA:  Record<StageVizItem['role'], number> = { ancestor: 0.040, parent: 0.055, selected: 0.10, child: 0.065 };
+const ROLE_ALPHA: Record<StageVizItem['role'], number> = { ancestor: 0.15, parent: 0.38, selected: 1.0, sibling: 0.45, child: 0.60 };
+const SHAFT_DIA:  Record<StageVizItem['role'], number> = { ancestor: 0.040, parent: 0.055, selected: 0.10, sibling: 0.055, child: 0.065 };
+const DOT_DIA:    Record<StageVizItem['role'], number> = { ancestor: 0.15, parent: 0.28, selected: 0.42, sibling: 0.28, child: 0.34 };
+const DOT_EM:     Record<StageVizItem['role'], number> = { ancestor: 0.25, parent: 0.50, selected: 0.70, sibling: 0.45, child: 0.60 };
 
 const BASE_HEIGHT  = 1.35;
 const CONE_H       = 0.28;
@@ -100,7 +102,7 @@ export class SpellVisualization {
 
     onDirectionEdited?: (delta: { pitch: number; yaw: number }) => void;
     onPositionEdited?:  (delta: { x: number; y: number; z: number }) => void;
-    onStageSelected?:   (role: 'parent' | 'child', childIndex?: number) => void;
+    onStageSelected?:   (role: 'parent' | 'sibling' | 'child', childIndex?: number) => void;
     onEditModeChanged?: (mode: EditMode) => void;
 
     constructor(canvas: HTMLCanvasElement) {
@@ -172,7 +174,7 @@ export class SpellVisualization {
             if (pick?.hit && pick.pickedMesh) {
                 const item = this.meshToItem.get(pick.pickedMesh as Mesh);
                 if (item && item.role !== 'selected')
-                    this.onStageSelected?.(item.role as 'parent' | 'child', item.childIndex);
+                    this.onStageSelected?.(item.role as 'parent' | 'sibling' | 'child', item.childIndex);
             }
         };
 
@@ -199,7 +201,7 @@ export class SpellVisualization {
                     z: -(dx * rz + dy * fz) * MOVE_SENS,
                 });
             } else if (this.editMode === 'moveV') {
-                this.onPositionEdited?.({ x: 0, y: dy * MOVE_SENS, z: 0 });
+                this.onPositionEdited?.({ x: 0, y: -dy * MOVE_SENS, z: 0 });
             }
         });
         window.addEventListener('pointerup', () => { this.dragging = false; });
@@ -252,6 +254,7 @@ export class SpellVisualization {
         const ancestors = items.filter(it => it.role === 'ancestor');
         const parent    = items.find(it => it.role === 'parent');
         const selected  = items.find(it => it.role === 'selected');
+        const siblings  = items.filter(it => it.role === 'sibling');
         const children  = items.filter(it => it.role === 'child');
 
         let cur = origin.clone();
@@ -264,6 +267,11 @@ export class SpellVisualization {
         if (parent) {
             const o = cur.add(new Vector3(parent.offsetX, parent.offsetY, parent.offsetZ));
             selOrigin = this.buildItem(parent, o);
+        }
+
+        for (const sib of siblings) {
+            const o = selOrigin.add(new Vector3(sib.offsetX, sib.offsetY, sib.offsetZ));
+            this.buildItem(sib, o);
         }
 
         let childOrigin = selOrigin.clone();
@@ -287,7 +295,7 @@ export class SpellVisualization {
         const len      = isCarrierDelay
             ? Math.min(CARRIER_MAX_LEN, Math.max(CARRIER_MIN_LEN, item.triggerMs * CARRIER_MS_TO_LEN))
             : ARROW_LEN[item.role];
-        const pickable = item.role === 'selected' || item.role === 'child';
+        const pickable = item.role !== 'ancestor';
         const tag      = `${item.role}${item.childIndex ?? ''}`;
 
         if (item.stationary) {
@@ -298,6 +306,15 @@ export class SpellVisualization {
         for (let i = 0; i < dirs.length; i++) {
             this.buildArrow(item, origin, dirs[i], len, color, alpha, pickable, `${tag}_${i}`);
         }
+
+        // spawn-point dot
+        const dot  = MeshBuilder.CreateSphere(`vzDot_${tag}`, { diameter: DOT_DIA[item.role], segments: 6 }, this.scene);
+        dot.position   = origin.clone();
+        dot.isPickable = pickable;
+        const dMat = this.mat(`vzDM_${tag}`, color, alpha, DOT_EM[item.role]);
+        dot.material   = dMat;
+        this.disposables.push(dot, dMat);
+        if (pickable) this.meshToItem.set(dot, item);
 
         if (item.role === 'selected') this.buildSelectionRing(origin);
         return origin.add(dirs[0].scale(len)); // primary dir endpoint for children
