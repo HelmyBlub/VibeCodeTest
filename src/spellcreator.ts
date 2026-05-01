@@ -35,6 +35,9 @@ interface StageDraft {
     burnDuration: number;   // fire: DoT duration ms
     slowPercent:  number;   // ice: slow % 0–90
     jumpCount:    number;   // lightning: chain jumps 0–8
+    offsetX:      number;
+    offsetY:      number;
+    offsetZ:      number;
     children:     StageDraft[];
 }
 
@@ -48,14 +51,16 @@ function fmt1(n: number): string { return (Math.round(n * 10) / 10).toFixed(1); 
 function defaultStageDraft(): StageDraft {
     return { element: 'carrier', power: 50, pitch: 45, yaw: 0, count: 1, spread: 0, yawSpread: 0,
              stationary: false, trigger: 'delay', triggerMs: 1500, duration: 3000,
-             burnDuration: 3000, slowPercent: 50, jumpCount: 2, children: [] };
+             burnDuration: 3000, slowPercent: 50, jumpCount: 2,
+             offsetX: 0, offsetY: 0, offsetZ: 0, children: [] };
 }
 
 function defaultStageRoots(): StageDraft[] {
     return [{
         element: 'fire', power: 50, pitch: 0, yaw: 0, count: 1, spread: 0, yawSpread: 0,
         stationary: false, trigger: 'delay', triggerMs: 1500, duration: 3000,
-        burnDuration: 3000, slowPercent: 50, jumpCount: 2, children: [],
+        burnDuration: 3000, slowPercent: 50, jumpCount: 2,
+        offsetX: 0, offsetY: 0, offsetZ: 0, children: [],
     }];
 }
 
@@ -70,6 +75,7 @@ function draftToStage(d: StageDraft, cooldown: number, castTime: number): SpellS
         burnDuration: d.element === 'fire'      ? d.burnDuration : undefined,
         slowPercent:  d.element === 'ice'       ? d.slowPercent  : undefined,
         jumpCount:    d.element === 'lightning' ? d.jumpCount    : undefined,
+        offsetX: d.offsetX, offsetY: d.offsetY, offsetZ: d.offsetZ,
         children:     d.children.map(c => draftToStage(c, cooldown, castTime)),
     };
 }
@@ -86,6 +92,7 @@ function stageToDraft(s: SpellStage): StageDraft {
         burnDuration: s.burnDuration ?? 3000,
         slowPercent:  s.slowPercent  ?? 50,
         jumpCount:    s.jumpCount    ?? 2,
+        offsetX: s.offsetX ?? 0, offsetY: s.offsetY ?? 0, offsetZ: s.offsetZ ?? 0,
         children: s.children.map(stageToDraft),
     };
 }
@@ -207,7 +214,8 @@ export class SpellCreator {
     private toVizItem(s: StageDraft, role: StageVizItem['role'], childIndex?: number): StageVizItem {
         return { pitch: s.pitch, yaw: s.yaw, element: s.element,
                  stationary: s.stationary, count: s.count, yawSpread: s.yawSpread,
-                 trigger: s.trigger, triggerMs: s.triggerMs, role, childIndex };
+                 trigger: s.trigger, triggerMs: s.triggerMs, role, childIndex,
+                 offsetX: s.offsetX, offsetY: s.offsetY, offsetZ: s.offsetZ };
     }
 
     private updateViz(): void {
@@ -426,6 +434,17 @@ export class SpellCreator {
   <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="jumpCount" min="0" max="8" value="${s.jumpCount}">
 </div>` : '';
 
+        const offsetRow = `
+<div class="sc-stage-inline">
+  <span class="sc-stage-lbl">Offset</span>
+  <span class="sc-unit">X</span>
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="offsetX" min="-1.5" max="1.5" step="0.1" value="${s.offsetX.toFixed(1)}">
+  <span class="sc-unit">Y</span>
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="offsetY" min="-1.5" max="1.5" step="0.1" value="${s.offsetY.toFixed(1)}">
+  <span class="sc-unit">Z</span>
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="offsetZ" min="-1.5" max="1.5" step="0.1" value="${s.offsetZ.toFixed(1)}">
+</div>`;
+
         this.stageEditorEl.innerHTML = `
 <div class="sc-stage-crumb-row">
   <div class="sc-stage-crumb">${this.buildCrumb(this.selectedStagePath)}</div>
@@ -438,6 +457,7 @@ export class SpellCreator {
   <div class="sc-stage-inline sc-stage-elems">${elemBtns}</div>
   ${powerRow}
   ${dirRows}
+  ${offsetRow}
   ${elemSpecificRow}
   ${stagingSection}
 </div>`;
@@ -488,7 +508,10 @@ export class SpellCreator {
                 s.triggerMs = num(100, 10000, true);
                 this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
             }
-            case 'jumpCount':     s.jumpCount    = num(0, 8);      break;
+            case 'jumpCount':  s.jumpCount = num(0, 8); break;
+            case 'offsetX': { s.offsetX = Math.max(-1.5, Math.min(1.5, parseFloat(value) || 0)); this.chainUpdatePreview(); return; }
+            case 'offsetY': { s.offsetY = Math.max(-1.5, Math.min(1.5, parseFloat(value) || 0)); this.chainUpdatePreview(); return; }
+            case 'offsetZ': { s.offsetZ = Math.max(-1.5, Math.min(1.5, parseFloat(value) || 0)); this.chainUpdatePreview(); return; }
             case 'slowPercent':   case 'slowPercentN':   s.slowPercent   = num(0, 90);   sync('slowPercent','slowPercentN', String(s.slowPercent)); break;
             case 'burnDuration': {
                 s.burnDuration = num(500, 10000, true);
@@ -614,7 +637,7 @@ export class SpellCreator {
 
   <div class="sc-viz-side">
     <canvas id="sc-viz-canvas" class="sc-viz-canvas" width="${VIZ_W}" height="${VIZ_H}"></canvas>
-    <div class="sc-viz-hint">Drag to orbit · Click parent/child · Hold G: rotate direction</div>
+    <div class="sc-viz-hint">Drag to orbit · F/R: rotate · G: move · G+Shift: vertical</div>
   </div>
 </div>`;
 
@@ -662,10 +685,33 @@ export class SpellCreator {
             this.renderStageTree(); this.renderStageEditor(); this.updateViz();
         };
 
+        this.viz.onPositionEdited = (delta) => {
+            if (!this.selectedStagePath) return;
+            const s  = this.getNode(this.selectedStagePath);
+            const ps = this.selectedStagePath.join(',');
+            s.offsetX = Math.max(-1.5, Math.min(1.5, s.offsetX + delta.x));
+            s.offsetY = Math.max(-1.5, Math.min(1.5, s.offsetY + delta.y));
+            s.offsetZ = Math.max(-1.5, Math.min(1.5, s.offsetZ + delta.z));
+            const setField = (field: string, val: string) => {
+                const el = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="${field}"]`);
+                if (el) el.value = val;
+            };
+            setField('offsetX', s.offsetX.toFixed(1));
+            setField('offsetY', s.offsetY.toFixed(1));
+            setField('offsetZ', s.offsetZ.toFixed(1));
+            this.renderStageTree();
+            this.chainUpdatePreview();
+        };
+
         this.viz.onEditModeChanged = (mode) => {
-            this.vizHintEl.textContent = mode === 'rotate'
-                ? '↻ ROTATE — drag left/right: yaw · up/down: pitch'
-                : 'Drag to orbit · Click parent/child · Hold G: rotate direction';
+            if (mode === 'rotate')
+                this.vizHintEl.textContent = '↻ ROTATE — drag left/right: yaw · up/down: pitch';
+            else if (mode === 'moveH')
+                this.vizHintEl.textContent = '⊕ MOVE — drag to shift spawn position (horizontal)';
+            else if (mode === 'moveV')
+                this.vizHintEl.textContent = '⊕ MOVE — drag up/down: vertical offset';
+            else
+                this.vizHintEl.textContent = 'Drag to orbit · F/R: rotate · G: move · G+Shift: vertical';
         };
 
         this.renderStageTree();

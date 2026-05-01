@@ -17,9 +17,12 @@ export interface StageVizItem {
     childIndex?: number;
     trigger:     StageTrigger;
     triggerMs:   number;
+    offsetX:     number;
+    offsetY:     number;
+    offsetZ:     number;
 }
 
-export type EditMode = 'none' | 'rotate';
+export type EditMode = 'none' | 'rotate' | 'moveH' | 'moveV';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -42,6 +45,7 @@ const SHAFT_DIA:  Record<StageVizItem['role'], number> = { ancestor: 0.040, pare
 const BASE_HEIGHT  = 1.35;
 const CONE_H       = 0.28;
 const ROTATE_SENS  = 0.38;
+const MOVE_SENS    = 0.012;
 const MAX_FAN_SHOW = 4;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -87,13 +91,15 @@ export class SpellVisualization {
     private readonly disposables: { dispose(): void }[] = [];
     private readonly meshToItem   = new Map<Mesh, StageVizItem>();
 
-    private active   = false;
+    private active     = false;
     private editMode: EditMode = 'none';
-    private dragging = false;
-    private lastX    = 0;
-    private lastY    = 0;
+    private dragging   = false;
+    private lastX      = 0;
+    private lastY      = 0;
+    private gKeyHeld   = false;
 
     onDirectionEdited?: (delta: { pitch: number; yaw: number }) => void;
+    onPositionEdited?:  (delta: { x: number; y: number; z: number }) => void;
     onStageSelected?:   (role: 'parent' | 'child', childIndex?: number) => void;
     onEditModeChanged?: (mode: EditMode) => void;
 
@@ -178,23 +184,52 @@ export class SpellVisualization {
             if (!this.dragging || this.editMode === 'none') return;
             const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
             this.lastX = e.clientX; this.lastY = e.clientY;
-            this.onDirectionEdited?.({ yaw: dx * ROTATE_SENS, pitch: -dy * ROTATE_SENS });
+            if (this.editMode === 'rotate') {
+                this.onDirectionEdited?.({ yaw: dx * ROTATE_SENS, pitch: -dy * ROTATE_SENS });
+            } else if (this.editMode === 'moveH') {
+                // camera-aware: map screen dx/dy to world XZ using camera's horizontal orientation
+                const cx = this.cam.target.x - this.cam.position.x;
+                const cz = this.cam.target.z - this.cam.position.z;
+                const cl = Math.sqrt(cx * cx + cz * cz) || 1;
+                const fx = cx / cl, fz = cz / cl;          // camera forward in XZ
+                const rx = -fz,     rz = fx;                // camera right  in XZ (CCW 90°)
+                this.onPositionEdited?.({
+                    x: -(dx * rx + dy * fx) * MOVE_SENS,
+                    y: 0,
+                    z: -(dx * rz + dy * fz) * MOVE_SENS,
+                });
+            } else if (this.editMode === 'moveV') {
+                this.onPositionEdited?.({ x: 0, y: dy * MOVE_SENS, z: 0 });
+            }
         });
         window.addEventListener('pointerup', () => { this.dragging = false; });
 
         window.addEventListener('keydown', e => {
-            if (!this.active || this.editMode !== 'none') return;
-            if (e.key === 'g' || e.key === 'G' || e.key === 'r' || e.key === 'R') this.enterEdit();
+            if (!this.active) return;
+            if (e.key === 'g' || e.key === 'G') {
+                this.gKeyHeld = true;
+                this.enterEdit(e.shiftKey ? 'moveV' : 'moveH');
+            } else if (e.key === 'Shift' && this.gKeyHeld) {
+                this.enterEdit('moveV');
+            } else if ((e.key === 'f' || e.key === 'F' || e.key === 'r' || e.key === 'R') && this.editMode === 'none') {
+                this.enterEdit('rotate');
+            }
         });
         window.addEventListener('keyup', e => {
-            if (e.key === 'g' || e.key === 'G' || e.key === 'r' || e.key === 'R') this.exitEdit();
+            if (e.key === 'g' || e.key === 'G') {
+                this.gKeyHeld = false; this.exitEdit();
+            } else if (e.key === 'Shift' && this.gKeyHeld && this.active) {
+                this.enterEdit('moveH');
+            } else if (e.key === 'f' || e.key === 'F' || e.key === 'r' || e.key === 'R') {
+                this.exitEdit();
+            }
         });
     }
 
-    private enterEdit(): void {
-        this.editMode = 'rotate';
+    private enterEdit(mode: 'rotate' | 'moveH' | 'moveV'): void {
+        this.editMode = mode;
         this.cam.detachControl();
-        this.onEditModeChanged?.('rotate');
+        this.onEditModeChanged?.(mode);
     }
 
     private exitEdit(): void {
@@ -220,15 +255,27 @@ export class SpellVisualization {
         const children  = items.filter(it => it.role === 'child');
 
         let cur = origin.clone();
-        for (const anc of ancestors) cur = this.buildItem(anc, cur);
+        for (const anc of ancestors) {
+            const o = cur.add(new Vector3(anc.offsetX, anc.offsetY, anc.offsetZ));
+            cur = this.buildItem(anc, o);
+        }
 
         let selOrigin = cur.clone();
-        if (parent) selOrigin = this.buildItem(parent, cur);
+        if (parent) {
+            const o = cur.add(new Vector3(parent.offsetX, parent.offsetY, parent.offsetZ));
+            selOrigin = this.buildItem(parent, o);
+        }
 
         let childOrigin = selOrigin.clone();
-        if (selected) childOrigin = this.buildItem(selected, selOrigin);
+        if (selected) {
+            const o = selOrigin.add(new Vector3(selected.offsetX, selected.offsetY, selected.offsetZ));
+            childOrigin = this.buildItem(selected, o);
+        }
 
-        for (const child of children) this.buildItem(child, childOrigin);
+        for (const child of children) {
+            const o = childOrigin.add(new Vector3(child.offsetX, child.offsetY, child.offsetZ));
+            this.buildItem(child, o);
+        }
 
         this.cam.target.copyFrom(selOrigin);
     }

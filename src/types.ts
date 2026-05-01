@@ -54,6 +54,9 @@ export interface SpellStage {
     burnDuration?: number;    // fire: DoT duration ms
     slowPercent?:  number;    // ice: slow strength 0–90 (%)
     jumpCount?:    number;    // lightning: chain jumps 0–8
+    offsetX?:      number;    // spawn offset from parent (world units)
+    offsetY?:      number;
+    offsetZ?:      number;
     children:     SpellStage[];
 }
 

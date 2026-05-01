@@ -185,7 +185,11 @@ export class CombatSystem {
             for (let i = 0; i < s0.count; i++) {
                 const yaw = this.fanYaw(s0.yaw, s0.count, s0.yawSpread, i);
                 const dir = this.pitchYawDir(s0.pitch, yaw, playerForward, right);
-                this.spawnLiveStage(origin.clone(), dir, s0);
+                const spawnPos = origin.clone();
+                spawnPos.addInPlace(right.scale(s0.offsetX ?? 0));
+                spawnPos.addInPlace(Vector3.Up().scale(s0.offsetY ?? 0));
+                spawnPos.addInPlace(playerForward.scale(s0.offsetZ ?? 0));
+                this.spawnLiveStage(spawnPos, dir, s0);
             }
         }
     }
@@ -242,6 +246,9 @@ export class CombatSystem {
             const spawnCount = child.element === 'cloud' ? 1 : child.count;
             for (let i = 0; i < spawnCount; i++) {
                 const spawnPos = base.clone();
+                spawnPos.x += child.offsetX ?? 0;
+                spawnPos.y += child.offsetY ?? 0;
+                spawnPos.z += child.offsetZ ?? 0;
                 if (child.spread > 0) {
                     const a = Math.random() * Math.PI * 2;
                     const r = Math.random() * child.spread;
