@@ -2,7 +2,7 @@ import {
     ArcRotateCamera, Color3, Color4, Engine, HemisphericLight,
     Mesh, MeshBuilder, Quaternion, Scene, StandardMaterial, Vector3,
 } from '@babylonjs/core';
-import type { StageElement } from './types';
+import type { StageElement, StageTrigger } from './types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +15,8 @@ export interface StageVizItem {
     yawSpread:   number;       // degrees
     role:        'ancestor' | 'parent' | 'selected' | 'child';
     childIndex?: number;
+    trigger:     StageTrigger;
+    triggerMs:   number;
 }
 
 export type EditMode = 'none' | 'rotate';
@@ -25,10 +27,15 @@ const ELEM_COLOR: Record<StageElement, Color3> = {
     fire:      new Color3(1,    0.40, 0.05),
     ice:       new Color3(0.15, 0.70, 1),
     lightning: new Color3(1,    0.85, 0.1),
-    none:      new Color3(0.55, 0.55, 0.70),
+    carrier:   new Color3(0.55, 0.55, 0.70),
+    cloud:     new Color3(0.40, 0.70, 0.90),
 };
 
 const ARROW_LEN:  Record<StageVizItem['role'], number> = { ancestor: 1.4, parent: 1.8, selected: 2.8, child: 1.8 };
+// STAGE_CARRIER_SPEED (0.3 u/frame) ÷ 16.67 (ms/frame at 60fps) = actual game units per ms
+const CARRIER_MS_TO_LEN = 0.018;
+const CARRIER_MIN_LEN   = 0.3;
+const CARRIER_MAX_LEN   = 60;
 const ROLE_ALPHA: Record<StageVizItem['role'], number> = { ancestor: 0.15, parent: 0.38, selected: 1.0, child: 0.60 };
 const SHAFT_DIA:  Record<StageVizItem['role'], number> = { ancestor: 0.040, parent: 0.055, selected: 0.10, child: 0.065 };
 
@@ -99,7 +106,7 @@ export class SpellVisualization {
         this.cam = new ArcRotateCamera('vzCam', Math.PI / 4, 1.1, 9, new Vector3(0, 1, 0), this.scene);
         this.cam.attachControl(canvas, true);
         this.cam.lowerRadiusLimit = 4;
-        this.cam.upperRadiusLimit = 20;
+        this.cam.upperRadiusLimit = 70;
         this.cam.lowerBetaLimit   = 0.05;
         this.cam.upperBetaLimit   = Math.PI / 2 - 0.02;
 
@@ -115,7 +122,7 @@ export class SpellVisualization {
     // ── Static scene ─────────────────────────────────────────────────────────
 
     private buildStaticMeshes(): void {
-        const ground = MeshBuilder.CreateGround('vzGround', { width: 10, height: 10, subdivisions: 10 }, this.scene);
+        const ground = MeshBuilder.CreateGround('vzGround', { width: 60, height: 60, subdivisions: 20 }, this.scene);
         const gMat = new StandardMaterial('vzGMat', this.scene);
         gMat.diffuseColor = new Color3(0.10, 0.10, 0.16);
         gMat.wireframe = true;
@@ -229,7 +236,10 @@ export class SpellVisualization {
     private buildItem(item: StageVizItem, origin: Vector3): Vector3 {
         const color    = ELEM_COLOR[item.element];
         const alpha    = ROLE_ALPHA[item.role];
-        const len      = ARROW_LEN[item.role];
+        const isCarrierDelay = item.element === 'carrier' && item.trigger === 'delay';
+        const len      = isCarrierDelay
+            ? Math.min(CARRIER_MAX_LEN, Math.max(CARRIER_MIN_LEN, item.triggerMs * CARRIER_MS_TO_LEN))
+            : ARROW_LEN[item.role];
         const pickable = item.role === 'selected' || item.role === 'child';
         const tag      = `${item.role}${item.childIndex ?? ''}`;
 

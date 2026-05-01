@@ -28,7 +28,8 @@ const STAGE_COLOR: Record<StageElement, [Color3, Color3]> = {
     fire:      ELEMENT_COLOR.fire,
     ice:       ELEMENT_COLOR.ice,
     lightning: ELEMENT_COLOR.lightning,
-    none:      [new Color3(0.6, 0.6, 0.85), new Color3(0.4, 0.4, 0.65)],
+    carrier:   [new Color3(0.6, 0.6, 0.85), new Color3(0.4, 0.4, 0.65)],
+    cloud:     [new Color3(0.4, 0.7,  0.90), new Color3(0.3, 0.5, 0.70)],
 };
 
 // ── Internal types ────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ interface LiveStage {
     spawnTime:  number;
     lastFire:   number;
     fired:      boolean;
+    fireCount:  number;   // cloud: how many interval ticks have fired
     hitEnemies: Set<Enemy>;
     grounded:   boolean;
     spawnPos:   Vector3;  // lightning: range check origin
@@ -220,6 +222,7 @@ export class CombatSystem {
             spawnTime:  Date.now(),
             lastFire:   Date.now(),
             fired:      false,
+            fireCount:  0,
             hitEnemies: new Set(),
             grounded:   false,
             spawnPos:   pos.clone(),
@@ -235,7 +238,9 @@ export class CombatSystem {
         const wRight = new Vector3(1, 0, 0);
 
         for (const child of children) {
-            for (let i = 0; i < child.count; i++) {
+            // cloud.count means tick count, not simultaneous spawns — always spawn one cloud
+            const spawnCount = child.element === 'cloud' ? 1 : child.count;
+            for (let i = 0; i < spawnCount; i++) {
                 const spawnPos = base.clone();
                 if (child.spread > 0) {
                     const a = Math.random() * Math.PI * 2;
@@ -281,30 +286,32 @@ export class CombatSystem {
     ): void {
         switch (ls.config.element) {
             case 'fire':
-                en.burnEnd = now + FIRE_BURN_DURATION;
-                en.burnDamage = ls.config.burnDamage;
+                en.burnEnd      = now + (ls.config.burnDuration ?? FIRE_BURN_DURATION);
+                en.burnDamage   = ls.config.burnDamage;
                 en.lastBurnTick = now;
                 break;
-            case 'ice': {
-                const t = ls.config.power / 100;
+            case 'ice':
                 en.slowEnd    = now + ICE_SLOW_DURATION;
-                en.slowFactor = ICE_MIN_SLOW - t * (ICE_MIN_SLOW - ICE_MAX_SLOW);
+                en.slowFactor = 1 - (ls.config.slowPercent ?? 50) / 100;
                 break;
-            }
             case 'lightning': {
-                // single chain jump for staged lightning
-                let nearest: Enemy | null = null; let nd = LIGHTNING_CHAIN_RANGE;
-                for (const other of enemies) {
-                    if (other === en || other.hp <= 0) continue;
-                    const d = Vector3.Distance(en.root.position, other.root.position);
-                    if (d < nd) { nd = d; nearest = other; }
-                }
-                if (nearest) {
+                const jumps = ls.config.jumpCount ?? 1;
+                let source = en; let remaining = jumps;
+                const chained = new Set<Enemy>([en]);
+                while (remaining > 0) {
+                    let nearest: Enemy | null = null; let nd = LIGHTNING_CHAIN_RANGE;
+                    for (const other of enemies) {
+                        if (chained.has(other) || other.hp <= 0) continue;
+                        const d = Vector3.Distance(source.root.position, other.root.position);
+                        if (d < nd) { nd = d; nearest = other; }
+                    }
+                    if (!nearest) break;
                     const cdmg = Math.round(ls.config.damage * LIGHTNING_CHAIN_MULT);
                     nearest.hp -= cdmg;
                     nearest.hpBar.scaling.x = Math.max(0, nearest.hp / ENEMY_MAX_HP);
                     if (nearest.hp <= 0) onKill(nearest);
                     this.spawnChainFlash(nearest.root.position.add(new Vector3(0, 2.5, 0)));
+                    chained.add(nearest); source = nearest; remaining--;
                 }
                 break;
             }
@@ -322,21 +329,23 @@ export class CombatSystem {
 
             this.moveStage(ls);
 
-            if (cfg.element === 'none') {
-                // ── Carrier / relay: trigger logic drives the chain ───────────
-                if ((cfg.stationary || ls.grounded) && age >= cfg.duration) {
-                    this.disposeLiveStage(ls, i); continue;
-                }
+            if (cfg.element === 'carrier') {
+                // ── Carrier: moves, fires children once, then disposes ────────
                 if (cfg.trigger === 'delay' && !ls.fired && age >= cfg.triggerMs) {
                     ls.fired = true; this.triggerNext(ls);
                     this.disposeLiveStage(ls, i); continue;
                 }
-                if (cfg.trigger === 'interval' && now - ls.lastFire >= cfg.triggerMs) {
-                    ls.lastFire = now; this.triggerNext(ls);
-                }
-                if (cfg.trigger === 'impact' && !cfg.stationary && ls.grounded && !ls.fired) {
+                if (cfg.trigger === 'impact' && ls.grounded && !ls.fired) {
                     ls.fired = true; this.triggerNext(ls);
                     this.disposeLiveStage(ls, i); continue;
+                }
+            } else if (cfg.element === 'cloud') {
+                // ── Cloud: stationary, fires children every triggerMs for count ticks ──
+                if (ls.fireCount >= cfg.count) {
+                    this.disposeLiveStage(ls, i); continue;
+                }
+                if (now - ls.lastFire >= cfg.triggerMs) {
+                    ls.lastFire = now; ls.fireCount++; this.triggerNext(ls);
                 }
             } else if (!cfg.stationary) {
                 // ── Elemental projectile: element-specific expiry, no chaining ─
@@ -396,7 +405,8 @@ export class CombatSystem {
             case 'fire':      return FIRE_SPEED;
             case 'ice':       return ICE_SPEED;
             case 'lightning': return LIGHTNING_SPEED;
-            case 'none':      return STAGE_CARRIER_SPEED;
+            case 'carrier':   return STAGE_CARRIER_SPEED;
+        case 'cloud':     return 0;
         }
     }
 

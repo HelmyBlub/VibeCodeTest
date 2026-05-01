@@ -21,55 +21,71 @@ export function calcBurnDamage(power: number, cooldown: number): number {
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface StageDraft {
-    element:    StageElement;
-    power:      number;
-    pitch:      number;
-    yaw:        number;
-    count:      number;
-    spread:     number;
-    yawSpread:  number;
-    stationary: boolean;
-    trigger:    StageTrigger;
-    triggerMs:  number;
-    duration:   number;
-    children:   StageDraft[];
+    element:      StageElement;
+    power:        number;
+    pitch:        number;
+    yaw:          number;
+    count:        number;
+    spread:       number;
+    yawSpread:    number;
+    stationary:   boolean;
+    trigger:      StageTrigger;
+    triggerMs:    number;
+    duration:     number;
+    burnDuration: number;   // fire: DoT duration ms
+    slowPercent:  number;   // ice: slow % 0–90
+    jumpCount:    number;   // lightning: chain jumps 0–8
+    children:     StageDraft[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const ELEMENT_EMOJI: Record<SpellElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡' };
-const STAGE_ELEM_ICON: Record<StageElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡', none: '○' };
+const STAGE_ELEM_ICON: Record<StageElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡', carrier: '→', cloud: '☁' };
 
 function fmt1(n: number): string { return (Math.round(n * 10) / 10).toFixed(1); }
 
 function defaultStageDraft(): StageDraft {
-    return { element: 'none', power: 50, pitch: 45, yaw: 0, count: 1, spread: 0, yawSpread: 0,
-             stationary: false, trigger: 'delay', triggerMs: 1500, duration: 3000, children: [] };
+    return { element: 'carrier', power: 50, pitch: 45, yaw: 0, count: 1, spread: 0, yawSpread: 0,
+             stationary: false, trigger: 'delay', triggerMs: 1500, duration: 3000,
+             burnDuration: 3000, slowPercent: 50, jumpCount: 2, children: [] };
 }
 
 function defaultStageRoots(): StageDraft[] {
     return [{
         element: 'fire', power: 50, pitch: 0, yaw: 0, count: 1, spread: 0, yawSpread: 0,
-        stationary: false, trigger: 'delay', triggerMs: 1500, duration: 3000, children: [],
+        stationary: false, trigger: 'delay', triggerMs: 1500, duration: 3000,
+        burnDuration: 3000, slowPercent: 50, jumpCount: 2, children: [],
     }];
 }
 
 function draftToStage(d: StageDraft, cooldown: number, castTime: number): SpellStage {
+    const stationary = d.element === 'cloud';
     return {
         element: d.element, power: d.power, pitch: d.pitch, yaw: d.yaw,
         count: d.count, spread: d.spread, yawSpread: d.yawSpread,
-        stationary: d.stationary, trigger: d.trigger, triggerMs: d.triggerMs, duration: d.duration,
-        damage:     d.element !== 'none' ? calcDamage(d.power, cooldown) : 0,
-        burnDamage: d.element === 'fire'  ? calcBurnDamage(d.power, cooldown) : 0,
-        children:   d.children.map(c => draftToStage(c, cooldown, castTime)),
+        stationary, trigger: d.trigger, triggerMs: d.triggerMs, duration: d.duration,
+        damage:       d.element !== 'carrier' && d.element !== 'cloud' ? calcDamage(d.power, cooldown) : 0,
+        burnDamage:   d.element === 'fire'  ? calcBurnDamage(d.power, cooldown) : 0,
+        burnDuration: d.element === 'fire'      ? d.burnDuration : undefined,
+        slowPercent:  d.element === 'ice'       ? d.slowPercent  : undefined,
+        jumpCount:    d.element === 'lightning' ? d.jumpCount    : undefined,
+        children:     d.children.map(c => draftToStage(c, cooldown, castTime)),
     };
 }
 
 function stageToDraft(s: SpellStage): StageDraft {
+    // migrate legacy 'none' stages to 'carrier' or 'cloud'
+    const element: StageElement = (s.element as string) === 'none'
+        ? (s.stationary ? 'cloud' : 'carrier')
+        : s.element;
     return {
-        element: s.element, power: s.power, pitch: s.pitch, yaw: s.yaw,
+        element, power: s.power, pitch: s.pitch, yaw: s.yaw,
         count: s.count, spread: s.spread, yawSpread: s.yawSpread,
         stationary: s.stationary, trigger: s.trigger, triggerMs: s.triggerMs, duration: s.duration,
+        burnDuration: s.burnDuration ?? 3000,
+        slowPercent:  s.slowPercent  ?? 50,
+        jumpCount:    s.jumpCount    ?? 2,
         children: s.children.map(stageToDraft),
     };
 }
@@ -77,7 +93,7 @@ function stageToDraft(s: SpellStage): StageDraft {
 export function collectSpellElements(stages: SpellStage[]): SpellElement[] {
     const elems: SpellElement[] = [];
     for (const s of stages) {
-        if (s.element !== 'none') elems.push(s.element as SpellElement);
+        if (s.element !== 'carrier' && s.element !== 'cloud') elems.push(s.element as SpellElement);
         elems.push(...collectSpellElements(s.children));
     }
     return elems;
@@ -170,7 +186,7 @@ export class SpellCreator {
 
         if (pos === 'into') {
             const tgt = this.getNode(adjTgt);
-            if (tgt.element !== 'none') return;
+            if (tgt.element !== 'carrier' && tgt.element !== 'cloud') return;
             tgt.children.push(node);
             this.selectedStagePath = [...adjTgt, tgt.children.length - 1];
         } else {
@@ -190,7 +206,8 @@ export class SpellCreator {
 
     private toVizItem(s: StageDraft, role: StageVizItem['role'], childIndex?: number): StageVizItem {
         return { pitch: s.pitch, yaw: s.yaw, element: s.element,
-                 stationary: s.stationary, count: s.count, yawSpread: s.yawSpread, role, childIndex };
+                 stationary: s.stationary, count: s.count, yawSpread: s.yawSpread,
+                 trigger: s.trigger, triggerMs: s.triggerMs, role, childIndex };
     }
 
     private updateViz(): void {
@@ -237,7 +254,7 @@ export class SpellCreator {
 
     private chainMana(nodes: StageDraft[]): number {
         return nodes.reduce((s, n) =>
-            s + (n.element !== 'none' ? calcManaCost(n.power, this.castTime) : 5) + this.chainMana(n.children), 0);
+            s + (n.element !== 'carrier' && n.element !== 'cloud' ? calcManaCost(n.power, this.castTime) : 5) + this.chainMana(n.children), 0);
     }
 
     private commitToActiveSlot(): void {
@@ -299,18 +316,20 @@ export class SpellCreator {
         const isSel  = this.selectedStagePath?.join(',') === ps;
         const canDel = path.length > 1 || this.stageRoots.length > 1;
         const icon   = STAGE_ELEM_ICON[s.element];
-        const label  = s.element === 'none' ? (s.stationary ? 'Area' : 'Carrier') : s.element[0].toUpperCase() + s.element.slice(1);
+        const label  = s.element[0].toUpperCase() + s.element.slice(1);
 
         const meta: string[] = [];
-        if (s.element !== 'none') meta.push(`pwr:${s.power}`);
-        if (s.count > 1) meta.push(`×${s.count}`);
-        if (!s.stationary && s.element !== 'none')
+        if (s.element !== 'carrier' && s.element !== 'cloud') meta.push(`pwr:${s.power}`);
+        if (s.element === 'fire')      meta.push(`burn:${fmt1(s.burnDuration/1000)}s`);
+        if (s.element === 'ice')       meta.push(`slow:${s.slowPercent}%`);
+        if (s.element === 'lightning') meta.push(`j:${s.jumpCount}`);
+        if (s.element === 'carrier')
             meta.push(s.pitch > 0 ? `↑${s.pitch}°` : s.pitch < 0 ? `↓${Math.abs(s.pitch)}°` : '→');
-        if (s.element === 'none' && s.children.length > 0) {
-            const t = s.trigger === 'delay' ? `d:${fmt1(s.triggerMs/1000)}s`
-                    : s.trigger === 'interval' ? `/${s.triggerMs}ms` : 'on hit';
-            meta.push(t);
-        }
+        if (s.element !== 'carrier' && s.element !== 'cloud' && s.count > 1) meta.push(`×${s.count}`);
+        if (s.element === 'carrier' && s.children.length > 0)
+            meta.push(s.trigger === 'delay' ? `d:${fmt1(s.triggerMs/1000)}s` : 'on hit');
+        if (s.element === 'cloud' && s.children.length > 0)
+            meta.push(`×${s.count}/${s.triggerMs}ms = ${fmt1(s.count * s.triggerMs / 1000)}s`);
         if (s.children.length > 0) meta.push(`→${s.children.length}`);
 
         let html = `
@@ -334,19 +353,22 @@ export class SpellCreator {
         }
         const s  = this.getNode(this.selectedStagePath);
         const ps = this.selectedStagePath.join(',');
+        const el = s.element;
 
-        const elemBtns = (['none', 'fire', 'ice', 'lightning'] as StageElement[]).map(el =>
-            `<button class="sc-btn sc-stage-elem-btn${s.element===el?' active':''}" data-path="${ps}" data-val="${el}">${STAGE_ELEM_ICON[el]} ${el==='none'?'None':el[0].toUpperCase()+el.slice(1)}</button>`
+        const elemBtns = (['carrier', 'cloud', 'fire', 'ice', 'lightning'] as StageElement[]).map(e =>
+            `<button class="sc-btn sc-stage-elem-btn${el===e?' active':''}" data-path="${ps}" data-val="${e}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`
         ).join('');
 
-        const powerRow = s.element !== 'none' ? `
+        const isStaging = el === 'carrier' || el === 'cloud';
+        const powerRow = !isStaging ? `
 <div class="sc-stage-inline">
   <span class="sc-stage-lbl">Power</span>
   <input type="range" class="sc-slider" data-path="${ps}" data-stage-field="power" min="1" max="100" step="1" value="${s.power}">
   <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="powerN" min="1" max="100" value="${s.power}">
 </div>` : '';
 
-        const dirRows = !s.stationary ? `
+        // cloud is always stationary; carrier and elemental stages always have direction
+        const dirRows = el !== 'cloud' ? `
 <div class="sc-stage-inline">
   <span class="sc-stage-lbl">Pitch</span>
   <input type="range" class="sc-slider" data-path="${ps}" data-stage-field="pitch" min="-90" max="90" step="1" value="${s.pitch}">
@@ -360,24 +382,48 @@ export class SpellCreator {
   <span class="sc-unit">°</span>
 </div>` : '';
 
-        const durationRow = s.stationary ? `
-<div class="sc-stage-inline">
-  <span class="sc-stage-lbl">Lifetime</span>
-  <input type="range" class="sc-slider" data-path="${ps}" data-stage-field="duration" min="500" max="10000" step="100" value="${s.duration}">
-  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="durationN" min="0.5" max="10" step="0.1" value="${(s.duration/1000).toFixed(1)}">
-  <span class="sc-unit">s</span>
-</div>` : '';
-
-        const triggerSection = s.element === 'none' ? `
+        // staging section — carrier: direction connector; cloud: tick/interval controls
+        const stagingSection = el === 'carrier' ? `
 <div class="sc-stage-connector">
   <span class="sc-conn-arrow">▼ then</span>
   <select class="sc-stage-trigger" data-path="${ps}" data-stage-field="trigger">
     <option value="delay"${s.trigger==='delay'?' selected':''}>Delay</option>
     <option value="impact"${s.trigger==='impact'?' selected':''}>Impact</option>
-    <option value="interval"${s.trigger==='interval'?' selected':''}>Interval</option>
   </select>
   ${s.trigger !== 'impact' ? `<input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="triggerMs" min="100" max="10000" value="${s.triggerMs}"><span class="sc-unit">ms</span>` : ''}
   <button class="sc-btn sc-stage-add-child" data-path="${ps}" style="margin-left:auto">+ Child</button>
+</div>` : el === 'cloud' ? `
+<div class="sc-stage-inline">
+  <span class="sc-stage-lbl">Ticks</span>
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="count" min="1" max="20" value="${s.count}">
+</div>
+<div class="sc-stage-inline">
+  <span class="sc-stage-lbl">Interval</span>
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="triggerMs" min="100" max="10000" step="100" value="${s.triggerMs}">
+  <span class="sc-unit">ms · ${fmt1(s.count * s.triggerMs / 1000)} s total</span>
+</div>
+<div class="sc-stage-connector">
+  <span class="sc-conn-arrow">▼ each tick</span>
+  <button class="sc-btn sc-stage-add-child" data-path="${ps}" style="margin-left:auto">+ Child</button>
+</div>` : '';
+
+        // element-specific rows
+        const elemSpecificRow = el === 'fire' ? `
+<div class="sc-stage-inline">
+  <span class="sc-stage-lbl">Burn time</span>
+  <input type="range" class="sc-slider" data-path="${ps}" data-stage-field="burnDuration" min="500" max="10000" step="500" value="${s.burnDuration}">
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="burnDurationN" min="0.5" max="10" step="0.5" value="${(s.burnDuration/1000).toFixed(1)}">
+  <span class="sc-unit">s</span>
+</div>` : el === 'ice' ? `
+<div class="sc-stage-inline">
+  <span class="sc-stage-lbl">Slow</span>
+  <input type="range" class="sc-slider" data-path="${ps}" data-stage-field="slowPercent" min="0" max="90" step="5" value="${s.slowPercent}">
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="slowPercentN" min="0" max="90" step="5" value="${s.slowPercent}">
+  <span class="sc-unit">%</span>
+</div>` : el === 'lightning' ? `
+<div class="sc-stage-inline">
+  <span class="sc-stage-lbl">Jumps</span>
+  <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="jumpCount" min="0" max="8" value="${s.jumpCount}">
 </div>` : '';
 
         this.stageEditorEl.innerHTML = `
@@ -391,25 +437,9 @@ export class SpellCreator {
 <div class="sc-stage-editor-body">
   <div class="sc-stage-inline sc-stage-elems">${elemBtns}</div>
   ${powerRow}
-  <div class="sc-stage-inline">
-    <span class="sc-stage-lbl">Count</span>
-    <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="count" min="1" max="6" value="${s.count}">
-    <label class="sc-stage-check-lbl"><input type="checkbox" data-path="${ps}" data-stage-field="stationary" ${s.stationary?'checked':''}> Stationary</label>
-  </div>
   ${dirRows}
-  <div class="sc-stage-inline">
-    <span class="sc-stage-lbl">Spread</span>
-    <input type="range" class="sc-slider" data-path="${ps}" data-stage-field="spread" min="0" max="5" step="0.1" value="${s.spread}">
-    <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="spreadN" min="0" max="5" step="0.1" value="${s.spread.toFixed(1)}">
-  </div>
-  <div class="sc-stage-inline">
-    <span class="sc-stage-lbl">Yaw fan</span>
-    <input type="range" class="sc-slider" data-path="${ps}" data-stage-field="yawSpread" min="0" max="180" step="1" value="${s.yawSpread}">
-    <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="yawSpreadN" min="0" max="180" value="${s.yawSpread}">
-    <span class="sc-unit">°</span>
-  </div>
-  ${durationRow}
-  ${triggerSection}
+  ${elemSpecificRow}
+  ${stagingSection}
 </div>`;
     }
 
@@ -425,7 +455,6 @@ export class SpellCreator {
     }
 
     private stageLabel(s: StageDraft): string {
-        if (s.element === 'none') return s.stationary ? 'Area' : 'Carrier';
         return s.element[0].toUpperCase() + s.element.slice(1);
     }
 
@@ -451,8 +480,28 @@ export class SpellCreator {
             case 'yaw':       case 'yawN':       s.yaw       = num(-180,180); sync('yaw','yawN',String(s.yaw));                   break;
             case 'yawSpread': case 'yawSpreadN': s.yawSpread = num(0,180);    sync('yawSpread','yawSpreadN',String(s.yawSpread)); break;
             case 'spread':    case 'spreadN':    s.spread    = num(0,5,false); sync('spread','spreadN',s.spread.toFixed(1));      break;
-            case 'count':     s.count     = num(1, 6);     break;
-            case 'triggerMs': s.triggerMs = num(100, 10000); break;
+            case 'count': {
+                s.count = num(1, s.element === 'cloud' ? 20 : 6);
+                this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+            }
+            case 'triggerMs': {
+                s.triggerMs = num(100, 10000, true);
+                this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+            }
+            case 'jumpCount':     s.jumpCount    = num(0, 8);      break;
+            case 'slowPercent':   case 'slowPercentN':   s.slowPercent   = num(0, 90);   sync('slowPercent','slowPercentN', String(s.slowPercent)); break;
+            case 'burnDuration': {
+                s.burnDuration = num(500, 10000, true);
+                const en = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="burnDurationN"]`);
+                if (en) en.value = (s.burnDuration / 1000).toFixed(1);
+                this.renderStageTree(); this.chainUpdatePreview(); return;
+            }
+            case 'burnDurationN': {
+                s.burnDuration = Math.max(500, Math.min(10000, Math.round(Number(value) * 1000)));
+                const el = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="burnDuration"]`);
+                if (el) el.value = String(s.burnDuration);
+                this.renderStageTree(); this.chainUpdatePreview(); return;
+            }
             case 'duration': {
                 s.duration = num(500, 10000);
                 const en = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="durationN"]`);
@@ -484,9 +533,13 @@ export class SpellCreator {
             for (const s of nodes) {
                 const pad  = '&nbsp;&nbsp;'.repeat(depth);
                 const icon = STAGE_ELEM_ICON[s.element];
-                const dmg  = s.element !== 'none' ? ` · ${calcDamage(s.power, this.cooldown)} dmg` : '';
-                const trig = s.element === 'none' && s.children.length
-                    ? ` → ${s.trigger}${s.trigger !== 'impact' ? ' '+s.triggerMs+'ms' : ''}` : '';
+                const isStaging = s.element === 'carrier' || s.element === 'cloud';
+                const dmg  = !isStaging ? ` · ${calcDamage(s.power, this.cooldown)} dmg` : '';
+                const trig = isStaging && s.children.length
+                    ? (s.element === 'cloud'
+                        ? ` → ×${s.count} / ${s.triggerMs}ms`
+                        : ` → ${s.trigger}${s.trigger !== 'impact' ? ' '+s.triggerMs+'ms' : ''}`)
+                    : '';
                 lines.push(`<span class="sc-proj-preview-item">${pad}${icon} ${this.stageLabel(s)}${s.count>1?' ×'+s.count:''}${dmg}${trig}</span>`);
                 walk(s.children, depth + 1);
             }
@@ -671,8 +724,9 @@ export class SpellCreator {
                 const path  = t.dataset['path']!.split(',').map(Number);
                 const node  = this.getNode(path);
                 const newEl = t.dataset['val'] as StageElement;
-                node.element = newEl;
-                if (newEl !== 'none') node.children = [];
+                node.element    = newEl;
+                node.stationary = newEl === 'cloud';
+                if (newEl !== 'carrier' && newEl !== 'cloud') node.children = [];
                 this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
             }
             if (t.classList.contains('sc-stage-copy-single')) { this.copyStage(false); return; }
@@ -753,7 +807,7 @@ export class SpellCreator {
 
             const rect     = item.getBoundingClientRect();
             const pct      = (e.clientY - rect.top) / rect.height;
-            const canChild = item.dataset['dragElement'] === 'none';
+            const canChild = item.dataset['dragElement'] === 'carrier' || item.dataset['dragElement'] === 'cloud';
             const newPos: 'before' | 'after' | 'into' =
                 canChild && pct > 0.33 && pct < 0.67 ? 'into' : pct <= 0.5 ? 'before' : 'after';
 

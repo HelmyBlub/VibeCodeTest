@@ -34,24 +34,27 @@ export interface Fireball {
 }
 
 export type SpellElement = 'fire' | 'ice' | 'lightning';
-export type StageElement = SpellElement | 'none';
+export type StageElement = SpellElement | 'carrier' | 'cloud';
 export type StageTrigger = 'delay' | 'impact' | 'interval';
 
 export interface SpellStage {
-    element:    StageElement;
-    power:      number;     // 1–100
-    pitch:      number;     // degrees -90 to 90
-    yaw:        number;     // degrees -180 to 180
-    count:      number;     // simultaneous spawns
-    spread:     number;     // random position offset radius (world units)
-    yawSpread:  number;     // yaw fan angle (degrees); count=1 → random, count>1 → even fan
-    stationary: boolean;    // area/cloud vs flying projectile
-    trigger:    StageTrigger;
-    triggerMs:  number;     // ms for delay period or interval period
-    duration:   number;     // total stage lifetime ms (stationary only)
-    damage:     number;     // computed at spell-build time
-    burnDamage: number;     // computed at spell-build time
-    children:   SpellStage[]; // sub-stages this stage fires when its trigger activates
+    element:      StageElement;
+    power:        number;     // 1–100
+    pitch:        number;     // degrees -90 to 90
+    yaw:          number;     // degrees -180 to 180
+    count:        number;     // simultaneous spawns
+    spread:       number;     // random position offset radius (world units)
+    yawSpread:    number;     // yaw fan angle (degrees); count=1 → random, count>1 → even fan
+    stationary:   boolean;    // area/cloud vs flying projectile
+    trigger:      StageTrigger;
+    triggerMs:    number;     // ms for delay period or interval period
+    duration:     number;     // total stage lifetime ms (stationary only)
+    damage:       number;     // computed at spell-build time
+    burnDamage:   number;     // computed at spell-build time
+    burnDuration?: number;    // fire: DoT duration ms
+    slowPercent?:  number;    // ice: slow strength 0–90 (%)
+    jumpCount?:    number;    // lightning: chain jumps 0–8
+    children:     SpellStage[];
 }
 
 export interface ProjectileConfig {

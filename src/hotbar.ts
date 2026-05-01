@@ -3,7 +3,7 @@ import type { Spell, SpellElement, SpellStage } from './types';
 function collectElements(stages: SpellStage[]): SpellElement[] {
     const out: SpellElement[] = [];
     for (const s of stages) {
-        if (s.element !== 'none') out.push(s.element as SpellElement);
+        if (s.element !== 'carrier' && s.element !== 'cloud') out.push(s.element as SpellElement);
         out.push(...collectElements(s.children));
     }
     return out;
