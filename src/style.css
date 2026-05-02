@@ -534,11 +534,57 @@ input[type="number"].sc-number::-webkit-outer-spin-button { -webkit-appearance: 
     flex-shrink: 0;
 }
 
-.sc-stage-elems { gap: 5px; }
+.sc-add-picker {
+    display: none;
+    position: fixed;
+    background: rgba(8,8,18,0.97);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 6px;
+    padding: 4px;
+    flex-direction: row;
+    gap: 0;
+    z-index: 200;
+}
+.sc-add-picker.visible { display: flex; }
+.sc-add-pick-btn { font-size: 12px; padding: 4px 10px; text-align: left; width: 100%; }
 
-.sc-stage-elem-btn {
-    font-size: 12px;
-    padding: 3px 8px;
+.sc-elem-wrap { position: relative; }
+.sc-elem-wrap.expanded .sc-elem-main {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.45);
+    color: #fff;
+}
+.sc-elem-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: rgba(8,8,18,0.97);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 6px;
+    padding: 4px;
+    flex-direction: row;
+    gap: 0;
+    z-index: 20;
+}
+.sc-elem-wrap.expanded .sc-elem-dropdown { display: flex; }
+.sc-elem-options {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 110px;
+}
+.sc-stage-elem-btn { font-size: 12px; padding: 4px 10px; text-align: left; width: 100%; }
+.sc-elem-hint {
+    font-size: 13px;
+    color: #999;
+    padding: 6px 10px;
+    width: 160px;
+    line-height: 1.45;
+    border-left: 1px solid rgba(255,255,255,0.08);
+    margin-left: 4px;
+    display: flex;
+    align-items: center;
 }
 .sc-stage-elem-btn.active {
     background: rgba(255,255,255,0.14);
@@ -662,7 +708,21 @@ input[type="number"].sc-number::-webkit-outer-spin-button { -webkit-appearance: 
     font-size: 11px;
     color: #666;
     letter-spacing: 0.3px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
 }
+.sc-crumb-btn {
+    background: none;
+    border: none;
+    padding: 1px 3px;
+    font-size: 11px;
+    color: #888;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.sc-crumb-btn:hover { background: rgba(255,255,255,0.08); color: #ccc; }
+.sc-crumb-sep, .sc-crumb-ellipsis { color: #444; font-size: 10px; }
 
 .sc-copy-wrap { position: relative; flex-shrink: 0; }
 .sc-copy-wrap.expanded .sc-stage-copy-main {

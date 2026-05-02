@@ -46,6 +46,13 @@ interface StageDraft {
 
 const ELEMENT_EMOJI: Record<SpellElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡' };
 const STAGE_ELEM_ICON: Record<StageElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡', carrier: '→', cloud: '☁' };
+const STAGE_ELEM_DESC: Record<StageElement, string> = {
+    carrier:   'Projectile that triggers child stages after a set delay.',
+    cloud:     'Stationary area that fires child stages on a repeating interval.',
+    fire:      'Burns the target, dealing damage over time.',
+    ice:       'Slows the target\'s movement speed.',
+    lightning: 'Arcs to nearby enemies on hit.',
+};
 
 function fmt1(n: number): string { return (Math.round(n * 10) / 10).toFixed(1); }
 
@@ -130,6 +137,7 @@ export class SpellCreator {
     private stageRoots: StageDraft[]    = defaultStageRoots();
     private selectedStagePath: number[] | null = [0];
     private dragSourcePath:    number[] | null = null;
+    private pendingAdd: { path: number[] | null } | null = null; // null=closed, path=null→root, path=[]→child
 
     readonly slots: (Spell | null)[] = [null, null, null, null];
     private readonly overlay: HTMLElement;
@@ -147,6 +155,7 @@ export class SpellCreator {
     private stageTreeEl!:   HTMLElement;
     private stageEditorEl!: HTMLElement;
     private vizHintEl!:     HTMLElement;
+    private addPickerEl!:   HTMLElement;
 
     constructor() {
         this.overlay = document.getElementById('spell-creator')!;
@@ -175,12 +184,18 @@ export class SpellCreator {
     }
 
     private adjustPathAfterRemoval(removed: number[], target: number[]): number[] {
-        if (removed.length !== target.length) return target;
-        for (let i = 0; i < removed.length - 1; i++) {
-            if (removed[i] !== target[i]) return target;
+        const d = removed.length - 1; // depth where the removal happened
+        if (target.length <= d) return target; // target is above the removal level
+        for (let i = 0; i < d; i++) {
+            if (removed[i] !== target[i]) return target; // different branch, unaffected
         }
-        const ri = removed[removed.length - 1], ti = target[target.length - 1];
-        return ri < ti ? [...target.slice(0, -1), ti - 1] : target;
+        // target shares the same parent array as the removed node
+        if (target[d] > removed[d]) {
+            const adj = [...target];
+            adj[d]--;
+            return adj;
+        }
+        return target;
     }
 
     private moveNode(srcPath: number[], tgtPath: number[], pos: 'before' | 'after' | 'into'): void {
@@ -190,17 +205,23 @@ export class SpellCreator {
         const node   = this.extractNode(srcPath);
         const adjTgt = this.adjustPathAfterRemoval(srcPath, tgtPath);
 
-        if (pos === 'into') {
-            const tgt = this.getNode(adjTgt);
-            if (tgt.element !== 'carrier' && tgt.element !== 'cloud') return;
-            tgt.children.push(node);
-            this.selectedStagePath = [...adjTgt, tgt.children.length - 1];
-        } else {
-            const arr = this.getParentArray(adjTgt);
-            let idx   = adjTgt[adjTgt.length - 1];
-            if (pos === 'after') idx++;
-            arr.splice(idx, 0, node);
-            this.selectedStagePath = [...adjTgt.slice(0, -1), idx];
+        try {
+            if (pos === 'into') {
+                const tgt = this.getNode(adjTgt);
+                if (!tgt || (tgt.element !== 'carrier' && tgt.element !== 'cloud')) throw new Error();
+                tgt.children.push(node);
+                this.selectedStagePath = [...adjTgt, tgt.children.length - 1];
+            } else {
+                const arr = this.getParentArray(adjTgt);
+                let idx   = adjTgt[adjTgt.length - 1];
+                if (pos === 'after') idx++;
+                arr.splice(idx, 0, node);
+                this.selectedStagePath = [...adjTgt.slice(0, -1), idx];
+            }
+        } catch {
+            // re-insert the extracted node at its original position to avoid data loss
+            this.getParentArray(srcPath).splice(srcPath[srcPath.length - 1], 0, node);
+            return;
         }
 
         this.renderStageTree();
@@ -390,9 +411,14 @@ export class SpellCreator {
         const ps = this.selectedStagePath.join(',');
         const el = s.element;
 
-        const elemBtns = (['carrier', 'cloud', 'fire', 'ice', 'lightning'] as StageElement[]).map(e =>
-            `<button class="sc-btn sc-stage-elem-btn${el===e?' active':''}" data-path="${ps}" data-val="${e}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`
+        const elemOptions = (['carrier', 'cloud', 'fire', 'ice', 'lightning'] as StageElement[]).map(e =>
+            `<button class="sc-btn sc-stage-elem-btn${el===e?' active':''}" data-path="${ps}" data-val="${e}" data-elem-desc="${STAGE_ELEM_DESC[e]}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`
         ).join('');
+        const elemDropdown = `
+<div class="sc-elem-wrap">
+  <button class="sc-btn sc-elem-main" style="font-size:14px;padding:5px 14px;font-weight:600">${STAGE_ELEM_ICON[el]} ${el[0].toUpperCase()+el.slice(1)}</button>
+  <div class="sc-elem-dropdown"><div class="sc-elem-options">${elemOptions}</div><div class="sc-elem-hint"></div></div>
+</div>`;
 
         const isStaging = el === 'carrier' || el === 'cloud';
         const powerRow = !isStaging ? `
@@ -474,8 +500,9 @@ export class SpellCreator {
 
         this.stageEditorEl.innerHTML = `
 <div class="sc-stage-crumb-row">
-  <div class="sc-stage-crumb">${this.buildCrumb(this.selectedStagePath)}</div>
-  <div class="sc-copy-wrap">
+  ${this.selectedStagePath.length > 1 ? `<div class="sc-stage-crumb">${this.buildCrumb(this.selectedStagePath.slice(0,-1))} <span class="sc-crumb-sep">›</span></div>` : ''}
+  ${elemDropdown}
+  <div class="sc-copy-wrap" style="margin-left:auto">
     <button class="sc-btn sc-stage-copy-main" data-has-children="${s.children.length > 0 ? '1' : ''}" style="font-size:11px;padding:3px 8px">⊕ Copy</button>
     <div class="sc-copy-dropdown">
       <button class="sc-btn sc-stage-copy-single">Stage</button>
@@ -484,7 +511,6 @@ export class SpellCreator {
   </div>
 </div>
 <div class="sc-stage-editor-body">
-  <div class="sc-stage-inline sc-stage-elems">${elemBtns}</div>
   ${powerRow}
   ${dirRows}
   ${offsetRow}
@@ -500,14 +526,18 @@ export class SpellCreator {
     }
 
     private buildCrumb(path: number[]): string {
-        const parts: string[] = [];
+        const segments: { label: string; path: number[] }[] = [];
         let node = this.stageRoots[path[0]];
-        parts.push(STAGE_ELEM_ICON[node.element] + ' ' + this.stageLabel(node));
+        segments.push({ label: STAGE_ELEM_ICON[node.element] + ' ' + this.stageLabel(node), path: [path[0]] });
         for (let i = 1; i < path.length; i++) {
             node = node.children[path[i]];
-            parts.push(STAGE_ELEM_ICON[node.element] + ' ' + this.stageLabel(node));
+            segments.push({ label: STAGE_ELEM_ICON[node.element] + ' ' + this.stageLabel(node), path: path.slice(0, i + 1) });
         }
-        return parts.join(' › ');
+        const visible = segments.length <= 2 ? segments : segments.slice(-2);
+        const prefix  = segments.length > 2 ? '<span class="sc-crumb-ellipsis">… ›</span> ' : '';
+        return prefix + visible.map(s =>
+            `<button class="sc-crumb-btn" data-crumb-path="${s.path.join(',')}">${s.label}</button>`
+        ).join(' <span class="sc-crumb-sep">›</span> ');
     }
 
     private stageLabel(s: StageDraft): string {
@@ -695,6 +725,20 @@ export class SpellCreator {
 </div>`;
 
         this.disableSliderTabbing();
+
+        // Floating add-type picker (lives on body so it can escape the panel)
+        if (!document.getElementById('sc-add-picker')) {
+            const p = document.createElement('div');
+            p.id = 'sc-add-picker';
+            p.className = 'sc-add-picker';
+            const opts = (['carrier', 'cloud', 'fire', 'ice', 'lightning'] as StageElement[]).map(e =>
+                `<button class="sc-btn sc-add-pick-btn" data-val="${e}" data-elem-desc="${STAGE_ELEM_DESC[e]}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`
+            ).join('');
+            p.innerHTML = `<div class="sc-elem-options">${opts}</div><div class="sc-elem-hint"></div>`;
+            document.body.appendChild(p);
+        }
+        this.addPickerEl = document.getElementById('sc-add-picker')!;
+
         this.previewEl    = this.overlay.querySelector<HTMLElement>('#sc-preview')!;
         this.slotTabsEl   = this.overlay.querySelector<HTMLElement>('#sc-slot-tabs')!;
         this.copyRowEl    = this.overlay.querySelector<HTMLElement>('#sc-copy-row')!;
@@ -777,11 +821,82 @@ export class SpellCreator {
         this.chainUpdatePreview();
     }
 
+    private showAddPicker(anchor: HTMLElement, pendingPath: number[] | null): void {
+        this.pendingAdd = { path: pendingPath };
+        const rect = anchor.getBoundingClientRect();
+        this.addPickerEl.style.top  = `${rect.bottom + 4}px`;
+        this.addPickerEl.style.left = `${rect.left}px`;
+        this.addPickerEl.classList.add('visible');
+        const hint = this.addPickerEl.querySelector<HTMLElement>('.sc-elem-hint')!;
+        hint.textContent = '';
+    }
+
+    private hideAddPicker(): void {
+        this.pendingAdd = null;
+        this.addPickerEl.classList.remove('visible');
+    }
+
     // ── Event binding ─────────────────────────────────────────────────────────
 
     private bindEvents(): void {
+        this.overlay.addEventListener('mouseover', e => {
+            const t = e.target as HTMLElement;
+            if (!t.classList.contains('sc-stage-elem-btn')) return;
+            const hint = t.closest('.sc-elem-dropdown')?.querySelector<HTMLElement>('.sc-elem-hint');
+            if (hint) hint.textContent = t.dataset['elemDesc'] ?? '';
+        });
+        this.overlay.addEventListener('mouseout', e => {
+            const t = e.target as HTMLElement;
+            if (!t.classList.contains('sc-stage-elem-btn')) return;
+            const hint = t.closest('.sc-elem-dropdown')?.querySelector<HTMLElement>('.sc-elem-hint');
+            if (hint) hint.textContent = '';
+        });
+
+        // Add-picker hover descriptions
+        this.addPickerEl.addEventListener('mouseover', e => {
+            const t = e.target as HTMLElement;
+            if (!t.classList.contains('sc-add-pick-btn')) return;
+            this.addPickerEl.querySelector<HTMLElement>('.sc-elem-hint')!.textContent = t.dataset['elemDesc'] ?? '';
+        });
+        this.addPickerEl.addEventListener('mouseout', e => {
+            const t = e.target as HTMLElement;
+            if (!t.classList.contains('sc-add-pick-btn')) return;
+            this.addPickerEl.querySelector<HTMLElement>('.sc-elem-hint')!.textContent = '';
+        });
+
+        // Add-picker selection
+        this.addPickerEl.addEventListener('click', e => {
+            const t = e.target as HTMLElement;
+            if (!t.classList.contains('sc-add-pick-btn')) return;
+            const el  = t.dataset['val'] as StageElement;
+            const add = this.pendingAdd;
+            this.hideAddPicker();
+            if (!add) return;
+            const draft = { ...defaultStageDraft(), element: el, stationary: el === 'cloud' };
+            if (add.path === null) {
+                this.stageRoots.push(draft);
+                this.selectedStagePath = [this.stageRoots.length - 1];
+            } else {
+                const node = this.getNode(add.path);
+                node.children.push(draft);
+                this.selectedStagePath = [...add.path, node.children.length - 1];
+            }
+            this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview();
+        });
+
+        // Close picker when clicking outside it
+        document.addEventListener('click', e => {
+            if (this.pendingAdd && !this.addPickerEl.contains(e.target as Node))
+                this.hideAddPicker();
+        }, true);
+
         this.overlay.addEventListener('click', e => {
             const t = e.target as HTMLElement;
+
+            if (t.classList.contains('sc-crumb-btn')) {
+                this.selectedStagePath = t.dataset['crumbPath']!.split(',').map(Number);
+                this.renderStageTree(); this.renderStageEditor(); this.updateViz(); return;
+            }
 
             const slotTab = t.dataset['slotTab'];
             if (slotTab !== undefined) { this.selectSlot(Number(slotTab)); return; }
@@ -794,6 +909,8 @@ export class SpellCreator {
                 this.copyRowEl.classList.remove('expanded');
             const expandedCopy = this.stageEditorEl?.querySelector<HTMLElement>('.sc-copy-wrap.expanded');
             if (expandedCopy && !t.closest('.sc-copy-wrap')) expandedCopy.classList.remove('expanded');
+            const expandedElem = this.stageEditorEl?.querySelector<HTMLElement>('.sc-elem-wrap.expanded');
+            if (expandedElem && !t.closest('.sc-elem-wrap')) expandedElem.classList.remove('expanded');
 
             // Structural buttons
             if (t.classList.contains('sc-stage-del')) {
@@ -820,15 +937,14 @@ export class SpellCreator {
             }
             if (t.classList.contains('sc-stage-add-child')) {
                 const path = t.dataset['path']!.split(',').map(Number);
-                const node = this.getNode(path);
-                node.children.push(defaultStageDraft());
-                this.selectedStagePath = [...path, node.children.length - 1];
-                this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+                this.showAddPicker(t, path); return;
             }
             if (t.classList.contains('sc-stage-add-root')) {
-                this.stageRoots.push(defaultStageDraft());
-                this.selectedStagePath = [this.stageRoots.length - 1];
-                this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+                this.showAddPicker(t, null); return;
+            }
+            if (t.classList.contains('sc-elem-main')) {
+                t.closest<HTMLElement>('.sc-elem-wrap')!.classList.toggle('expanded');
+                return;
             }
             if (t.classList.contains('sc-stage-elem-btn')) {
                 const path  = t.dataset['path']!.split(',').map(Number);
