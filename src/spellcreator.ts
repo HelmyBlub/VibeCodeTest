@@ -269,9 +269,24 @@ export class SpellCreator {
                  manaCost: Math.max(1, this.chainMana(this.stageRoots)), projectiles: [], stages };
     }
 
-    private chainMana(nodes: StageDraft[]): number {
-        return nodes.reduce((s, n) =>
-            s + (n.element !== 'carrier' && n.element !== 'cloud' ? calcManaCost(n.power, this.castTime) : 5) + this.chainMana(n.children), 0);
+    private chainMana(nodes: StageDraft[], mult = 1): number {
+        return nodes.reduce((sum, n) => {
+            if (n.element === 'cloud') {
+                // faster interval = higher DPS = higher cost; slowest→×0.2, fastest→×1.5
+                const t = (n.intervalMs - 100) / 9900;
+                const intervalFactor = 1.5 - t * 1.3;
+                return sum + this.chainMana(n.children, mult * n.count * intervalFactor);
+            } else if (n.element === 'carrier') {
+                // impact: need to land the projectile — small flat discount
+                // delay: linear discount, up to 90% at max 10 s delay
+                const carrierMult = n.trigger === 'impact'
+                    ? 0.85
+                    : 1 - 0.9 * (n.triggerMs / 10000);
+                return sum + this.chainMana(n.children, mult * carrierMult);
+            } else {
+                return sum + calcManaCost(n.power, this.castTime) * mult + this.chainMana(n.children, mult);
+            }
+        }, 0);
     }
 
     private commitToActiveSlot(): void {
