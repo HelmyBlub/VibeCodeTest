@@ -66,7 +66,14 @@ function fireSpell(spell: Spell, slotIndex: number): void {
 }
 
 window.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        const active = document.activeElement as HTMLElement | null;
+        const tag = active?.tagName;
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') { active!.blur(); return; }
+    }
     if (e.key === 'Tab') {
+        const creatorEl = document.getElementById('spell-creator');
+        if (creatorEl?.contains(document.activeElement)) return;
         e.preventDefault();
         cancelCast();
         if (!spellCreator.visible) {

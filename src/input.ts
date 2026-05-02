@@ -7,7 +7,9 @@ export function createInput(): InputState {
 
     window.addEventListener('keydown', e => {
         keys[e.key.toLowerCase()] = true;
-        if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(e.key.toLowerCase())) {
+        const tag = (document.activeElement as HTMLElement)?.tagName;
+        const isInput = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+        if (!isInput && [' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(e.key.toLowerCase())) {
             e.preventDefault();
         }
     });

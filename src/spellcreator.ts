@@ -420,7 +420,7 @@ export class SpellCreator {
 <div class="sc-stage-inline">
   <span class="sc-stage-lbl">Interval</span>
   <input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="intervalMs" min="100" max="10000" step="100" value="${s.intervalMs}">
-  <span class="sc-unit">ms · ${fmt1(s.count * s.intervalMs / 1000)} s total</span>
+  <span class="sc-unit">ms · <span class="sc-cloud-total">${fmt1(s.count * s.intervalMs / 1000)}</span> s total</span>
 </div>
 <div class="sc-stage-connector">
   <span class="sc-conn-arrow">▼ each tick</span>
@@ -476,6 +476,12 @@ export class SpellCreator {
   ${elemSpecificRow}
   ${stagingSection}
 </div>`;
+        this.disableSliderTabbing();
+    }
+
+    private disableSliderTabbing(): void {
+        this.overlay.querySelectorAll<HTMLInputElement>('input[type="range"]')
+            .forEach(el => { el.tabIndex = -1; });
     }
 
     private buildCrumb(path: number[]): string {
@@ -509,6 +515,11 @@ export class SpellCreator {
             });
         };
 
+        const set = (f: string, val: string) => {
+            const el = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="${f}"]`);
+            if (el && el.value !== val) el.value = val;
+        };
+
         switch (field) {
             case 'power':     case 'powerN':     s.power     = num(1,100);    sync('power','powerN',String(s.power));             break;
             case 'pitch':     case 'pitchN':     s.pitch     = num(-90,90);   sync('pitch','pitchN',String(s.pitch));             break;
@@ -517,43 +528,62 @@ export class SpellCreator {
             case 'spread':    case 'spreadN':    s.spread    = num(0,5,false); sync('spread','spreadN',s.spread.toFixed(1));      break;
             case 'count': {
                 s.count = num(1, s.element === 'cloud' ? 20 : 6);
-                this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+                set('count', String(s.count));
+                const ct = this.stageEditorEl.querySelector<HTMLElement>('.sc-cloud-total');
+                if (ct) ct.textContent = fmt1(s.count * s.intervalMs / 1000);
+                this.renderStageTree(); this.chainUpdatePreview(); return;
             }
             case 'triggerMs': {
                 s.triggerMs = num(100, 10000, true);
-                this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+                set('triggerMs', String(s.triggerMs));
+                this.renderStageTree(); this.chainUpdatePreview(); return;
             }
             case 'intervalMs': {
                 s.intervalMs = num(100, 10000, true);
-                this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+                set('intervalMs', String(s.intervalMs));
+                const it = this.stageEditorEl.querySelector<HTMLElement>('.sc-cloud-total');
+                if (it) it.textContent = fmt1(s.count * s.intervalMs / 1000);
+                this.renderStageTree(); this.chainUpdatePreview(); return;
             }
-            case 'jumpCount':  s.jumpCount = num(0, 8); break;
-            case 'offsetX': { s.offsetX = Math.max(-1.5, Math.min(1.5, parseFloat(value) || 0)); this.chainUpdatePreview(); return; }
-            case 'offsetY': { s.offsetY = Math.max(-1.5, Math.min(1.5, parseFloat(value) || 0)); this.chainUpdatePreview(); return; }
-            case 'offsetZ': { s.offsetZ = Math.max(-1.5, Math.min(1.5, parseFloat(value) || 0)); this.chainUpdatePreview(); return; }
+            case 'jumpCount': s.jumpCount = num(0, 8); set('jumpCount', String(s.jumpCount)); break;
+            case 'offsetX': {
+                const n = parseFloat(value);
+                if (!isNaN(n)) { s.offsetX = Math.max(-1.5, Math.min(1.5, n)); set('offsetX', s.offsetX.toFixed(1)); }
+                this.chainUpdatePreview(); return;
+            }
+            case 'offsetY': {
+                const n = parseFloat(value);
+                if (!isNaN(n)) { s.offsetY = Math.max(-1.5, Math.min(1.5, n)); set('offsetY', s.offsetY.toFixed(1)); }
+                this.chainUpdatePreview(); return;
+            }
+            case 'offsetZ': {
+                const n = parseFloat(value);
+                if (!isNaN(n)) { s.offsetZ = Math.max(-1.5, Math.min(1.5, n)); set('offsetZ', s.offsetZ.toFixed(1)); }
+                this.chainUpdatePreview(); return;
+            }
             case 'slowPercent':   case 'slowPercentN':   s.slowPercent   = num(0, 90);   sync('slowPercent','slowPercentN', String(s.slowPercent)); break;
             case 'burnDuration': {
                 s.burnDuration = num(500, 10000, true);
-                const en = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="burnDurationN"]`);
-                if (en) en.value = (s.burnDuration / 1000).toFixed(1);
+                sync('burnDuration', 'burnDurationN', (s.burnDuration / 1000).toFixed(1));
+                set('burnDuration', String(s.burnDuration));
                 this.renderStageTree(); this.chainUpdatePreview(); return;
             }
             case 'burnDurationN': {
                 s.burnDuration = Math.max(500, Math.min(10000, Math.round(Number(value) * 1000)));
-                const el = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="burnDuration"]`);
-                if (el) el.value = String(s.burnDuration);
+                set('burnDuration', String(s.burnDuration));
+                set('burnDurationN', (s.burnDuration / 1000).toFixed(1));
                 this.renderStageTree(); this.chainUpdatePreview(); return;
             }
             case 'duration': {
                 s.duration = num(500, 10000);
-                const en = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="durationN"]`);
-                if (en) en.value = (s.duration / 1000).toFixed(1);
+                sync('duration', 'durationN', (s.duration / 1000).toFixed(1));
+                set('duration', String(s.duration));
                 this.renderStageTree(); this.chainUpdatePreview(); return;
             }
             case 'durationN': {
                 s.duration = Math.max(500, Math.min(10000, Math.round(Number(value) * 1000)));
-                const el = this.stageEditorEl.querySelector<HTMLInputElement>(`[data-path="${ps}"][data-stage-field="duration"]`);
-                if (el) el.value = String(s.duration);
+                set('duration', String(s.duration));
+                set('durationN', (s.duration / 1000).toFixed(1));
                 this.renderStageTree(); this.chainUpdatePreview(); return;
             }
             case 'trigger': {
@@ -640,7 +670,7 @@ export class SpellCreator {
     </div>
 
     <div class="sc-preview" id="sc-preview"></div>
-    <div class="sc-footer">Tab — close &nbsp;·&nbsp; 1–4 — cast in combat</div>
+    <div class="sc-footer">Tab — close &nbsp;·&nbsp; Esc — deselect field &nbsp;·&nbsp; 1–4 — cast in combat</div>
   </div>
 
   <div class="sc-viz-side">
@@ -649,6 +679,7 @@ export class SpellCreator {
   </div>
 </div>`;
 
+        this.disableSliderTabbing();
         this.previewEl    = this.overlay.querySelector<HTMLElement>('#sc-preview')!;
         this.slotTabsEl   = this.overlay.querySelector<HTMLElement>('#sc-slot-tabs')!;
         this.copyRowEl    = this.overlay.querySelector<HTMLElement>('#sc-copy-row')!;
