@@ -755,13 +755,6 @@ export class SpellCreator {
             const slotCopy = t.dataset['slotCopy'];
             if (slotCopy !== undefined) { this.copyToSlot(Number(slotCopy)); return; }
 
-            // Tree row select
-            const selEl = t.classList.contains('sc-tree-select') ? t : t.closest<HTMLElement>('.sc-tree-select');
-            if (selEl && !t.closest('button')) {
-                this.selectedStagePath = selEl.dataset['path']!.split(',').map(Number);
-                this.renderStageTree(); this.renderStageEditor(); this.updateViz(); return;
-            }
-
             // Structural buttons
             if (t.classList.contains('sc-stage-del')) {
                 const path       = t.dataset['path']!.split(',').map(Number);
@@ -777,6 +770,13 @@ export class SpellCreator {
                     else                        this.selectedStagePath = null;
                 }
                 this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+            }
+
+            // Tree row select — use the row container so clicks on the invisible drag handle also work
+            const rowEl = t.closest<HTMLElement>('[data-drag-path]');
+            if (rowEl && !t.closest('button')) {
+                this.selectedStagePath = rowEl.dataset['dragPath']!.split(',').map(Number);
+                this.renderStageTree(); this.renderStageEditor(); this.updateViz(); return;
             }
             if (t.classList.contains('sc-stage-add-child')) {
                 const path = t.dataset['path']!.split(',').map(Number);
