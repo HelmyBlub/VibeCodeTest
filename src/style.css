@@ -318,17 +318,28 @@ body { overflow: hidden; background: #000; }
 .sc-slot-tab { min-width: 54px; text-align: center; font-weight: bold; }
 .sc-slot-tab.active { border-color: #7af; color: #9cf; }
 
-.sc-copy-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 6px;
-    flex-wrap: wrap;
+.sc-slot-copy-wrap { position: relative; margin-top: 6px; display: inline-block; }
+.sc-slot-copy-wrap.expanded .sc-slot-copy-main {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.45);
+    color: #fff;
 }
-.sc-copy-label { font-size: 11px; color: #666; }
-.sc-slot-copy  { font-size: 12px; padding: 3px 8px; }
-
-.sc-editing-tag { font-size: 11px; color: #7af; margin-left: 6px; font-style: normal; }
+.sc-slot-copy-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: rgba(8,8,18,0.97);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 6px;
+    padding: 4px;
+    flex-direction: column;
+    gap: 3px;
+    z-index: 20;
+    min-width: 80px;
+}
+.sc-slot-copy-wrap.expanded .sc-slot-copy-dropdown { display: flex; }
+.sc-slot-copy-dropdown .sc-btn { font-size: 12px; padding: 4px 10px; text-align: left; width: 100%; }
 
 .sc-range-hint {
     font-size: 10px;
@@ -392,18 +403,6 @@ input[type="number"].sc-number::-webkit-outer-spin-button { -webkit-appearance: 
 }
 .sc-cost { font-size: 15px; margin-bottom: 5px; }
 .sc-desc { font-size: 13px; color: #888; }
-
-.sc-slots { margin-top: 4px; }
-.sc-slot-row {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    font-size: 13px;
-    color: #888;
-    padding: 3px 0;
-}
-.sc-slot-row em { color: #444; font-style: normal; }
-.sc-slot-num { font-weight: bold; color: #555; min-width: 14px; }
 
 .sc-footer {
     text-align: center;
@@ -664,3 +663,26 @@ input[type="number"].sc-number::-webkit-outer-spin-button { -webkit-appearance: 
     color: #666;
     letter-spacing: 0.3px;
 }
+
+.sc-copy-wrap { position: relative; flex-shrink: 0; }
+.sc-copy-wrap.expanded .sc-stage-copy-main {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.45);
+    color: #fff;
+}
+.sc-copy-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: rgba(8,8,18,0.97);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 6px;
+    padding: 4px;
+    flex-direction: column;
+    gap: 3px;
+    z-index: 20;
+    min-width: 80px;
+}
+.sc-copy-wrap.expanded .sc-copy-dropdown { display: flex; }
+.sc-copy-dropdown .sc-btn { font-size: 11px; padding: 4px 10px; text-align: left; width: 100%; }

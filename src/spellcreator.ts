@@ -119,12 +119,6 @@ function slotIcons(s: Spell): string {
     return unique.map(e => ELEMENT_EMOJI[e]).join('');
 }
 
-function spellLabel(s: Spell, active: boolean): string {
-    const ct  = s.castTime === 0 ? 'Instant' : `${fmt1(s.castTime / 1000)}s cast`;
-    const cd  = s.cooldown === 0 ? 'No CD'   : `${fmt1(s.cooldown / 1000)}s CD`;
-    const tag = active ? ' <em class="sc-editing-tag">editing</em>' : '';
-    return `${slotIcons(s)} · ${ct} · ${cd} · ${s.manaCost} mp${tag}`;
-}
 
 // ── SpellCreator ──────────────────────────────────────────────────────────────
 
@@ -144,7 +138,6 @@ export class SpellCreator {
 
     // DOM refs
     private previewEl!:     HTMLElement;
-    private slotListEl!:    HTMLElement;
     private slotTabsEl!:    HTMLElement;
     private copyRowEl!:     HTMLElement;
     private castSlider!:    HTMLInputElement;
@@ -309,7 +302,7 @@ export class SpellCreator {
 
     private copyToSlot(i: number): void {
         this.slots[i] = this.makeSpell();
-        this.renderSlotTabs(); this.updateSlotList();
+        this.renderSlotTabs();
     }
 
     private renderSlotTabs(): void {
@@ -320,9 +313,12 @@ export class SpellCreator {
     }
 
     private renderCopyRow(): void {
+        this.copyRowEl.classList.remove('expanded');
         const btns = [0,1,2,3].filter(i => i !== this.activeSlot)
-            .map(i => `<button class="sc-btn sc-slot-copy" data-slot-copy="${i}">→ Slot ${i+1}</button>`).join('');
-        this.copyRowEl.innerHTML = `<span class="sc-copy-label">Copy to:</span>${btns}`;
+            .map(i => `<button class="sc-btn sc-slot-copy" data-slot-copy="${i}">Slot ${i+1}</button>`).join('');
+        this.copyRowEl.innerHTML = `
+<button class="sc-btn sc-slot-copy-main" style="font-size:12px;padding:3px 8px">Copy to…</button>
+<div class="sc-slot-copy-dropdown">${btns}</div>`;
     }
 
     // ── Stage tree ────────────────────────────────────────────────────────────
@@ -464,9 +460,12 @@ export class SpellCreator {
         this.stageEditorEl.innerHTML = `
 <div class="sc-stage-crumb-row">
   <div class="sc-stage-crumb">${this.buildCrumb(this.selectedStagePath)}</div>
-  <div style="display:flex;gap:5px;flex-shrink:0">
-    <button class="sc-btn sc-stage-copy-single" style="font-size:11px;padding:3px 8px">⊕ Copy</button>
-    <button class="sc-btn sc-stage-copy-tree"   style="font-size:11px;padding:3px 8px">⊕ Clone</button>
+  <div class="sc-copy-wrap">
+    <button class="sc-btn sc-stage-copy-main" data-has-children="${s.children.length > 0 ? '1' : ''}" style="font-size:11px;padding:3px 8px">⊕ Copy</button>
+    <div class="sc-copy-dropdown">
+      <button class="sc-btn sc-stage-copy-single">Stage</button>
+      <button class="sc-btn sc-stage-copy-tree">Branch</button>
+    </div>
   </div>
 </div>
 <div class="sc-stage-editor-body">
@@ -593,16 +592,9 @@ export class SpellCreator {
 <div class="sc-proj-preview-list">${lines.join('')}</div>
 <div class="sc-desc">${ctLabel} · ${cdLabel}</div>`;
         this.commitToActiveSlot();
-        this.updateSlotList();
         this.updateViz();
     }
 
-    private updateSlotList(): void {
-        this.slotListEl.innerHTML = '<div class="sc-label">YOUR SPELLS</div>' +
-            this.slots.map((s, i) =>
-                `<div class="sc-slot-row"><span class="sc-slot-num">${i+1}</span>${s ? spellLabel(s, i===this.activeSlot) : '<em>Empty</em>'}</div>`
-            ).join('');
-    }
 
     // ── HTML skeleton ─────────────────────────────────────────────────────────
 
@@ -618,10 +610,7 @@ export class SpellCreator {
       <div class="sc-row" id="sc-slot-tabs">
         ${[0,1,2,3].map(i=>`<button class="sc-btn sc-slot-tab${i===this.activeSlot?' active':''}" data-slot-tab="${i}">Slot ${i+1}</button>`).join('')}
       </div>
-      <div class="sc-copy-row" id="sc-copy-row">
-        <span class="sc-copy-label">Copy to:</span>
-        ${[0,1,2,3].filter(i=>i!==this.activeSlot).map(i=>`<button class="sc-btn sc-slot-copy" data-slot-copy="${i}">→ Slot ${i+1}</button>`).join('')}
-      </div>
+      <div class="sc-slot-copy-wrap" id="sc-copy-row"></div>
     </div>
 
     <div class="sc-section">
@@ -651,7 +640,6 @@ export class SpellCreator {
     </div>
 
     <div class="sc-preview" id="sc-preview"></div>
-    <div id="sc-slot-list" class="sc-slots"></div>
     <div class="sc-footer">Tab — close &nbsp;·&nbsp; 1–4 — cast in combat</div>
   </div>
 
@@ -662,9 +650,9 @@ export class SpellCreator {
 </div>`;
 
         this.previewEl    = this.overlay.querySelector<HTMLElement>('#sc-preview')!;
-        this.slotListEl   = this.overlay.querySelector<HTMLElement>('#sc-slot-list')!;
         this.slotTabsEl   = this.overlay.querySelector<HTMLElement>('#sc-slot-tabs')!;
         this.copyRowEl    = this.overlay.querySelector<HTMLElement>('#sc-copy-row')!;
+        this.renderCopyRow();
         this.stageTreeEl  = this.overlay.querySelector<HTMLElement>('#sc-stage-tree')!;
         this.stageEditorEl = this.overlay.querySelector<HTMLElement>('#sc-stage-editor')!;
 
@@ -741,7 +729,6 @@ export class SpellCreator {
         this.renderStageTree();
         this.renderStageEditor();
         this.chainUpdatePreview();
-        this.updateSlotList();
     }
 
     // ── Event binding ─────────────────────────────────────────────────────────
@@ -752,8 +739,15 @@ export class SpellCreator {
 
             const slotTab = t.dataset['slotTab'];
             if (slotTab !== undefined) { this.selectSlot(Number(slotTab)); return; }
+            if (t.classList.contains('sc-slot-copy-main')) { this.copyRowEl.classList.toggle('expanded'); return; }
             const slotCopy = t.dataset['slotCopy'];
             if (slotCopy !== undefined) { this.copyToSlot(Number(slotCopy)); return; }
+
+            // Collapse dropdowns when clicking outside them
+            if (this.copyRowEl.classList.contains('expanded') && !t.closest('#sc-copy-row'))
+                this.copyRowEl.classList.remove('expanded');
+            const expandedCopy = this.stageEditorEl?.querySelector<HTMLElement>('.sc-copy-wrap.expanded');
+            if (expandedCopy && !t.closest('.sc-copy-wrap')) expandedCopy.classList.remove('expanded');
 
             // Structural buttons
             if (t.classList.contains('sc-stage-del')) {
@@ -798,6 +792,14 @@ export class SpellCreator {
                 node.stationary = newEl === 'cloud';
                 if (newEl !== 'carrier' && newEl !== 'cloud') node.children = [];
                 this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
+            }
+            if (t.classList.contains('sc-stage-copy-main')) {
+                if (t.dataset['hasChildren']) {
+                    t.closest<HTMLElement>('.sc-copy-wrap')!.classList.toggle('expanded');
+                } else {
+                    this.copyStage(false);
+                }
+                return;
             }
             if (t.classList.contains('sc-stage-copy-single')) { this.copyStage(false); return; }
             if (t.classList.contains('sc-stage-copy-tree'))   { this.copyStage(true);  return; }
