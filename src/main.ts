@@ -10,7 +10,10 @@ import { SpellCreator, calcDamage, calcBurnDamage, calcManaCost } from './spellc
 import { Hotbar } from './hotbar';
 import { SpellbookPickup } from './spellbook';
 import { ChoiceUI } from './choiceui';
+import { TypeLevelSystem } from './typelevel';
+import { DamageNumbers } from './damagenumbers';
 import {
+    BOSS_MAX_HP, BOSS_MELEE_DAMAGE,
     BOUNDARY, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
 } from './constants';
 import type { Spell, SpellElement, SpellStage, StageElement } from './types';
@@ -27,9 +30,11 @@ const camera       = createCamera(scene, canvas);
 const input        = createInput();
 const enemyManager = new EnemyManager(scene);
 const combat       = new CombatSystem(scene);
-const spellCreator = new SpellCreator();
-const hotbar       = new Hotbar();
-const choiceUI     = new ChoiceUI();
+const spellCreator  = new SpellCreator();
+const hotbar        = new Hotbar();
+const choiceUI      = new ChoiceUI();
+const typeLevels    = new TypeLevelSystem();
+const damageNumbers = new DamageNumbers(scene, canvas);
 
 // ── Unlocks ───────────────────────────────────────────────────────────────────
 
@@ -39,6 +44,28 @@ const unlocked = new Set<StageElement>([startElement]);
 
 spellCreator.setUnlockedTypes(unlocked);
 spellCreator.setDefaultElement(startElement);
+typeLevels.setVisibleTypes(unlocked);
+
+function onLevelUp(): void {
+    const dmgMult  = typeLevels.getGlobalDamageMultiplier();
+    const manaMult = typeLevels.getGlobalManaCostFactor();
+    combat.setDamageMultiplier(dmgMult);
+    spellCreator.setDisplayMultipliers(dmgMult, manaMult);
+}
+
+enemyManager.onKill = (en) => {
+    const leveled = typeLevels.addXp(en.lastHitChain ?? [], en.maxHp);
+    if (leveled) onLevelUp();
+};
+
+combat.onHealXp = (chain, amount) => {
+    const leveled = typeLevels.addXp(chain, amount);
+    if (leveled) onLevelUp();
+};
+
+combat.onDamageDealt = (pos, amount, element) => {
+    damageNumbers.spawn(pos, amount, element);
+};
 
 // ── Starter spell ─────────────────────────────────────────────────────────────
 
@@ -77,6 +104,7 @@ interface CastState {
     slotIndex: number;
     startTime: number;
     duration:  number;
+    manaPaid:  number;
 }
 let casting: CastState | null = null;
 
@@ -88,7 +116,7 @@ const INTERRUPT_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft',
 
 function cancelCast(): void {
     if (!casting) return;
-    player.regenMana(casting.spell.manaCost);
+    player.regenMana(casting.manaPaid);
     casting = null;
     castBarEl.style.display = 'none';
 }
@@ -109,6 +137,7 @@ let choiceOpen        = false;
 let lastSpawnTime     = 0;
 let bossSpawnPending  = true;   // spawn first boss shortly after game start
 let bossSpawnAt       = Date.now() + 5000; // 5s initial delay
+let bossesDefeated    = 0;
 
 function randomEdgePos(): { x: number; z: number } {
     const edge = BOUNDARY - 3;
@@ -125,7 +154,10 @@ function randomEdgePos(): { x: number; z: number } {
 function spawnBossNow(): void {
     bossSpawnPending = false;
     const { x, z } = randomEdgePos();
-    enemyManager.spawnBoss(x, z, () => {
+    const bossHp  = Math.round(BOSS_MAX_HP * (1 + bossesDefeated * 0.5));
+    const bossDmg = Math.round(BOSS_MELEE_DAMAGE * (1 + bossesDefeated * 0.25));
+    enemyManager.spawnBoss(x, z, bossHp, bossDmg, () => {
+        bossesDefeated++;
         // Boss died — drop spellbook at its last known position
         const boss = enemyManager.enemies.find(e => e.isBoss);
         const dropPos = boss?.root.position ?? new Vector3(x, 0, z);
@@ -161,6 +193,7 @@ function handlePickup(): void {
     choiceUI.show(choices, (picked) => {
         unlocked.add(picked);
         spellCreator.setUnlockedTypes(unlocked);
+        typeLevels.setVisibleTypes(unlocked);
         choiceOpen = false;
         bossSpawnPending = true;
         bossSpawnAt = Date.now() + 2000;
@@ -207,13 +240,14 @@ window.addEventListener('keydown', e => {
     if (!spell) return;
 
     if (Date.now() - slotLastCast[slotIndex] < slotCooldownMs[slotIndex]) return;
-    if (!player.spendMana(spell.manaCost)) return;
+    const effectiveCost = Math.ceil(spell.manaCost * typeLevels.getGlobalManaCostFactor());
+    if (!player.spendMana(effectiveCost)) return;
 
     const duration = spell.castTime;
     if (duration === 0) {
         fireSpell(spell, slotIndex);
     } else {
-        casting = { spell, slotIndex, startTime: Date.now(), duration };
+        casting = { spell, slotIndex, startTime: Date.now(), duration, manaPaid: effectiveCost };
         castBarLabel.textContent = 'Casting… (move to cancel)';
         castBarFill.style.width = '0%';
         castBarEl.style.display = 'block';
@@ -231,7 +265,9 @@ scene.onBeforeRenderObservable.add(() => {
     const right   = Vector3.Cross(Vector3.Up(), forward).normalize();
 
     hotbar.update(spellCreator.slots, slotLastCast, slotCooldownMs, player.mana,
+        typeLevels.getGlobalManaCostFactor(),
         spellCreator.visible ? creatorOpenedAt : undefined);
+    damageNumbers.update();
 
     if (spellCreator.visible || choiceOpen) return;
 

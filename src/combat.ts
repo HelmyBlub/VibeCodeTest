@@ -2,6 +2,7 @@ import {
     Color3, Mesh, MeshBuilder, PointLight, Quaternion, Scene, StandardMaterial, Vector3,
 } from '@babylonjs/core';
 import {
+    BOSS_SCALE,
     FIRE_BURN_DURATION, FIRE_GRAVITY, FIRE_MAX_DURATION, FIRE_MIN_DURATION,
     FIRE_SPEED, FIREBALL_HIT_RADIUS, GROUND_Y,
     HEAL_DRAG, HEAL_FALL_RATE, HEAL_MAX_DURATION, HEAL_MIN_HEIGHT,
@@ -43,7 +44,6 @@ interface HealBeam   { mesh: Mesh; life: number; maxLife: number; }
 interface LiveStage {
     config:     SpellStage;   // children embedded in config.children
     mesh:       Mesh;
-    light:      PointLight;
     mat:        StandardMaterial;
     vel:        Vector3;
     spawnTime:  number;
@@ -56,6 +56,7 @@ interface LiveStage {
     maxRange:   number;   // lightning: dispose distance
     initDir:    Vector3;  // world-space direction at spawn, used as forward reference for children
     healGiven:  number;   // heal: cumulative HP dispensed (includes passive decay)
+    ancestors:  StageElement[]; // parent element chain (excludes this stage's own element)
 }
 
 // ── CombatSystem ──────────────────────────────────────────────────────────────
@@ -67,6 +68,16 @@ export class CombatSystem {
     private readonly healBeams:   HealBeam[]  = [];
     private readonly mats: Record<SpellElement, StandardMaterial>;
     private readonly flashMat: StandardMaterial;
+    private damageMultiplier = 1.0;
+    // Capped game clock — advances at most 100 ms per frame to prevent real-time catch-up spirals
+    private gameTime = Date.now();
+
+    setDamageMultiplier(mult: number): void { this.damageMultiplier = mult; }
+
+    /** Called once per heal tick when something was healed. amount = total HP actually restored. */
+    onHealXp?: (chain: StageElement[], amount: number) => void;
+    /** Called on every direct damage hit. */
+    onDamageDealt?: (worldPos: Vector3, amount: number, element: StageElement) => void;
 
     constructor(private readonly scene: Scene) {
         this.mats = {
@@ -204,8 +215,10 @@ export class CombatSystem {
                 if (d < nearestDist) { nearestDist = d; nearest = other; }
             }
             if (!nearest) break;
-            const chainDmg = Math.round(p.damage * LIGHTNING_CHAIN_MULT);
+            const chainDmg = Math.round(p.damage * LIGHTNING_CHAIN_MULT * this.damageMultiplier);
+            nearest.lastHitChain = ['lightning'];
             nearest.hp -= chainDmg;
+            if (chainDmg > 0) this.onDamageDealt?.(nearest.root.position.add(new Vector3(0, 2.5, 0)), chainDmg, 'lightning');
             nearest.hpBar.scaling.x = Math.max(0, nearest.hp / nearest.maxHp);
             if (nearest.hp <= 0) onKill(nearest);
             this.spawnChainFlash(nearest.root.position.add(new Vector3(0, 2.5, 0)));
@@ -221,7 +234,9 @@ export class CombatSystem {
         const origin = playerPos.add(new Vector3(0, 1.2, 0));
 
         for (const s0 of spell.stages) {
-            for (let i = 0; i < s0.count; i++) {
+            // cloud.count = tick count, not simultaneous instances — only ever spawn one
+            const spawnCount = s0.element === 'cloud' ? 1 : s0.count;
+            for (let i = 0; i < spawnCount; i++) {
                 const yaw = this.fanYaw(s0.yaw, s0.count, s0.yawSpread, i);
                 const dir = this.pitchYawDir(s0.pitch, yaw, playerForward, right);
                 const spawnPos = origin.clone();
@@ -233,7 +248,8 @@ export class CombatSystem {
         }
     }
 
-    private spawnLiveStage(pos: Vector3, dir: Vector3, cfg: SpellStage): void {
+    private spawnLiveStage(pos: Vector3, dir: Vector3, cfg: SpellStage, ancestors: StageElement[] = []): void {
+        if (this.liveStages.length >= 100) return; // hard cap against exponential chains
         const [diffuse, emit] = STAGE_COLOR[cfg.element];
 
         const mat = new StandardMaterial(`stMat`, this.scene);
@@ -249,29 +265,36 @@ export class CombatSystem {
         }
         mesh.position = pos.clone();
         mesh.material  = mat;
-
-        const light = new PointLight('stLight', pos.clone(), this.scene);
-        light.diffuse   = emit;
-        light.intensity = cfg.stationary ? 0.6 : 1.5;
-        light.range     = cfg.stationary ? 5 : 6;
+        // No per-stage PointLight — emissive material provides glow without per-light GPU cost
 
         const vel      = cfg.stationary ? Vector3.Zero() : dir.scale(this.stageSpeed(cfg.element));
         const maxRange = cfg.element === 'lightning'
             ? LIGHTNING_BASE_RANGE + cfg.power * LIGHTNING_RANGE_POWER
             : Infinity;
 
+        let initDir: Vector3;
+        if (cfg.stationary) {
+            const flat = new Vector3(dir.x, 0, dir.z);
+            initDir = flat.length() > 0.001 ? flat.normalize() : new Vector3(0, 0, 1);
+        } else {
+            initDir = dir.clone();
+        }
+
+        // Use the capped game clock so spawned stages share a consistent time base
+        const t = this.gameTime;
         this.liveStages.push({
-            config: cfg, mesh, light, mat, vel,
-            spawnTime:  Date.now(),
-            lastFire:   Date.now(),
+            config: cfg, mesh, mat, vel,
+            spawnTime:  t,
+            lastFire:   t,
             fired:      false,
             fireCount:  0,
             hitEnemies: new Set(),
             grounded:   false,
             spawnPos:   pos.clone(),
             maxRange,
-            initDir:    dir.clone(),
+            initDir,
             healGiven:  0,
+            ancestors,
         });
     }
 
@@ -286,6 +309,9 @@ export class CombatSystem {
         const cross2 = Vector3.Cross(new Vector3(0, 0, 1), fwd);
         const right  = cross.length()  > 0.001 ? cross.normalize()  :
                        cross2.length() > 0.001 ? cross2.normalize() : new Vector3(-1, 0, 0);
+
+        // Children's ancestor chain = this stage's ancestors + this stage's element
+        const childAncestors: StageElement[] = [...ls.ancestors, ls.config.element];
 
         for (const child of children) {
             // cloud.count means tick count, not simultaneous spawns — always spawn one cloud
@@ -303,39 +329,42 @@ export class CombatSystem {
                 }
                 const yaw = this.fanYaw(child.yaw, child.count, child.yawSpread, i);
                 const dir = this.pitchYawDir(child.pitch, yaw, fwd, right);
-                this.spawnLiveStage(spawnPos, dir, child);
+                this.spawnLiveStage(spawnPos, dir, child, childAncestors);
             }
         }
     }
 
     private disposeLiveStage(ls: LiveStage, idx: number): void {
-        ls.mesh.dispose(); ls.light.dispose(); ls.mat.dispose();
+        ls.mesh.dispose(); ls.mat.dispose();
         this.liveStages.splice(idx, 1);
     }
 
-    private moveStage(ls: LiveStage): void {
+    // dtFactor: elapsed time relative to one 60-fps frame (1.0 = normal, 2.0 = half-speed, etc.)
+    private moveStage(ls: LiveStage, dtFactor: number): void {
         if (ls.config.stationary || ls.grounded) return;
         switch (ls.config.element) {
             case 'fire':
-                ls.vel.y += FIRE_GRAVITY;
+                ls.vel.y += FIRE_GRAVITY * dtFactor;
                 break;
             case 'ice':
-                ls.vel.y = Math.max(-ICE_MAX_FALL_SPEED, ls.vel.y - ICE_FALL_RATE);
-                ls.vel.x *= ICE_DRAG; ls.vel.z *= ICE_DRAG;
+                ls.vel.y = Math.max(-ICE_MAX_FALL_SPEED, ls.vel.y - ICE_FALL_RATE * dtFactor);
+                ls.vel.x *= Math.pow(ICE_DRAG,  dtFactor);
+                ls.vel.z *= Math.pow(ICE_DRAG,  dtFactor);
                 break;
             case 'heal':
-                // Gently fall then hover — never truly grounds
-                ls.vel.y -= HEAL_FALL_RATE;
-                ls.vel.x *= HEAL_DRAG; ls.vel.z *= HEAL_DRAG;
-                if (ls.mesh.position.y + ls.vel.y < HEAL_MIN_HEIGHT) {
+                ls.vel.y -= HEAL_FALL_RATE * dtFactor;
+                ls.vel.x *= Math.pow(HEAL_DRAG, dtFactor);
+                ls.vel.z *= Math.pow(HEAL_DRAG, dtFactor);
+                if (ls.mesh.position.y + ls.vel.y * dtFactor < HEAL_MIN_HEIGHT) {
                     ls.vel.y = 0;
                     ls.mesh.position.y = HEAL_MIN_HEIGHT;
                 }
                 break;
             // lightning, carrier, cloud: constant velocity
         }
-        ls.mesh.position.addInPlace(ls.vel);
-        ls.light.position.copyFrom(ls.mesh.position);
+        ls.mesh.position.x += ls.vel.x * dtFactor;
+        ls.mesh.position.y += ls.vel.y * dtFactor;
+        ls.mesh.position.z += ls.vel.z * dtFactor;
         // Non-heal projectiles ground at GROUND_Y
         if (ls.config.element !== 'heal' && ls.mesh.position.y <= GROUND_Y) {
             ls.mesh.position.y = GROUND_Y;
@@ -346,11 +375,13 @@ export class CombatSystem {
 
     private applyStageHitEffect(
         ls: LiveStage, en: Enemy, enemies: Enemy[], onKill: (e: Enemy) => void, now: number,
+        hitChain: StageElement[],
     ): void {
         switch (ls.config.element) {
             case 'fire':
+                en.lastHitChain = hitChain;
                 en.burnEnd      = now + (ls.config.burnDuration ?? FIRE_BURN_DURATION);
-                en.burnDamage   = ls.config.burnDamage;
+                en.burnDamage   = Math.round(ls.config.burnDamage * this.damageMultiplier);
                 en.lastBurnTick = now;
                 break;
             case 'ice':
@@ -369,31 +400,33 @@ export class CombatSystem {
                         if (d < nd) { nd = d; nearest = other; }
                     }
                     if (!nearest) break;
-                    const cdmg = Math.round(ls.config.damage * LIGHTNING_CHAIN_MULT);
+                    const cdmg = Math.round(ls.config.damage * LIGHTNING_CHAIN_MULT * this.damageMultiplier);
+                    nearest.lastHitChain = hitChain;
                     nearest.hp -= cdmg;
                     nearest.hpBar.scaling.x = Math.max(0, nearest.hp / nearest.maxHp);
+                    if (cdmg > 0) this.onDamageDealt?.(nearest.root.position.add(new Vector3(0, 2.5, 0)), cdmg, 'lightning');
                     if (nearest.hp <= 0) onKill(nearest);
                     this.spawnChainFlash(nearest.root.position.add(new Vector3(0, 2.5, 0)));
                     chained.add(nearest); source = nearest; remaining--;
                 }
                 break;
             }
-            // 'none': no combat effect
         }
     }
 
     private updateLiveStages(
         enemies: Enemy[], onKill: (en: Enemy) => void,
-        onHealPlayer?: (amt: number) => void, playerPos?: Vector3,
+        onHealPlayer: ((amt: number) => number) | undefined, playerPos: Vector3 | undefined,
+        gameNow: number, realNow: number, dtFactor: number,
     ): void {
-        const now = Date.now();
+        const now = gameNow; // stage-internal timing (movement, fire intervals, ages)
 
         for (let i = this.liveStages.length - 1; i >= 0; i--) {
             const ls  = this.liveStages[i];
             const age = now - ls.spawnTime;
             const cfg = ls.config;
 
-            this.moveStage(ls);
+            this.moveStage(ls, dtFactor);
 
             if (cfg.element === 'carrier') {
                 // ── Carrier: moves, fires children once, then disposes ────────
@@ -425,31 +458,38 @@ export class CombatSystem {
                 const remaining = Math.max(0, 1 - ls.healGiven / budget);
                 const orbScale  = 0.25 + remaining * 0.75;
                 ls.mesh.scaling.setAll(orbScale);
-                ls.light.intensity = remaining * 1.5;
+                // (no per-stage light — emissive material provides glow)
 
                 if (now - ls.lastFire >= HEAL_TICK_INTERVAL) {
                     ls.lastFire = now;
                     const radius = cfg.healRadius ?? HEAL_RADIUS;
                     const orbCenter = ls.mesh.position;
-                    // Heal enemies in range
+                    let totalHealed = 0;
+                    // Heal enemies in range (only if not already at full HP)
                     for (const en of enemies) {
                         if (en.hp <= 0 || en.hp >= en.maxHp) continue;
-                        const d = Vector3.Distance(orbCenter, en.root.position.add(new Vector3(0, 1, 0)));
-                        if (d >= radius) continue;
+                        if (this.enemyHitDist(orbCenter, en) >= radius) continue;
                         const healed = Math.min(HEAL_PER_TICK, en.maxHp - en.hp);
                         en.hp += healed;
                         en.hpBar.scaling.x = en.hp / en.maxHp;
                         ls.healGiven += healed;
+                        totalHealed += healed;
                     }
-                    // Heal player if in range
+                    // Heal player if in range — return value = actual HP restored (0 if already full)
                     if (playerPos && onHealPlayer) {
                         const playerCenter = playerPos.add(new Vector3(0, 1.0, 0));
                         const dp = Vector3.Distance(orbCenter, playerCenter);
                         if (dp < radius) {
-                            onHealPlayer(HEAL_PER_TICK);
-                            ls.healGiven += HEAL_PER_TICK;
-                            this.spawnHealBeam(orbCenter, playerCenter);
+                            const playerHealed = onHealPlayer(HEAL_PER_TICK);
+                            if (playerHealed > 0) {
+                                ls.healGiven += playerHealed;
+                                totalHealed  += playerHealed;
+                                this.spawnHealBeam(orbCenter, playerCenter);
+                            }
                         }
+                    }
+                    if (totalHealed > 0) {
+                        this.onHealXp?.([...ls.ancestors, 'heal'], totalHealed);
                     }
                 }
             } else if (!cfg.stationary) {
@@ -464,20 +504,22 @@ export class CombatSystem {
                 if (cfg.element === 'fire' && ls.grounded && age >= cfg.duration) {
                     this.disposeLiveStage(ls, i); continue;
                 }
+                // Universal fallback: despawn anything that lives more than 20 s
+                if (age > 20000) { this.disposeLiveStage(ls, i); continue; }
 
                 // Enemy collision
                 for (const en of enemies) {
                     if (en.hp <= 0 || ls.hitEnemies.has(en)) continue;
-                    const dist = Vector3.Distance(
-                        ls.mesh.position,
-                        en.root.position.add(new Vector3(0, 1, 0)),
-                    );
-                    if (dist >= FIREBALL_HIT_RADIUS) continue;
+                    if (this.enemyHitDist(ls.mesh.position, en) >= FIREBALL_HIT_RADIUS) continue;
 
                     ls.hitEnemies.add(en);
-                    en.hp -= cfg.damage;
+                    const hitChain: StageElement[] = [...ls.ancestors, cfg.element];
+                    en.lastHitChain = hitChain;
+                    const stageDmg = Math.round(cfg.damage * this.damageMultiplier);
+                    en.hp -= stageDmg;
                     en.hpBar.scaling.x = Math.max(0, en.hp / en.maxHp);
-                    this.applyStageHitEffect(ls, en, enemies, onKill, now);
+                    if (stageDmg > 0) this.onDamageDealt?.(en.root.position.add(new Vector3(0, 2.5, 0)), stageDmg, cfg.element);
+                    this.applyStageHitEffect(ls, en, enemies, onKill, realNow, hitChain);
                     if (en.hp <= 0) onKill(en);
                     // lightning stops on first hit; fire/ice pass through
                     if (cfg.element === 'lightning') { this.disposeLiveStage(ls, i); break; }
@@ -487,6 +529,15 @@ export class CombatSystem {
     }
 
     // ── Shared helpers ────────────────────────────────────────────────────────
+
+    // Distance from pos to the nearest point on the enemy's body axis (capsule approximation).
+    // Accounts for boss scale so hits register across the full body height.
+    private enemyHitDist(pos: Vector3, en: Enemy): number {
+        const bodyH = (en.isBoss ? BOSS_SCALE : 1) * 1.6;
+        const rootY = en.root.position.y;
+        const nearY = Math.max(rootY, Math.min(rootY + bodyH, pos.y));
+        return Vector3.Distance(pos, new Vector3(en.root.position.x, nearY, en.root.position.z));
+    }
 
     private pitchYawDir(pitchDeg: number, yawDeg: number, forward: Vector3, right: Vector3): Vector3 {
         const pr = pitchDeg * Math.PI / 180;
@@ -521,9 +572,16 @@ export class CombatSystem {
 
     update(
         enemies: Enemy[], onKill: (en: Enemy) => void,
-        onHealPlayer?: (amt: number) => void, playerPos?: Vector3,
+        onHealPlayer?: (amt: number) => number, playerPos?: Vector3,
     ): void {
-        const now = Date.now();
+        // Advance capped game clock (max 100 ms/frame) to prevent real-time catch-up spirals
+        const realNow = Date.now();
+        const cappedDelta = Math.min(realNow - this.gameTime, 100);
+        this.gameTime += cappedDelta;
+        const now = realNow; // real time for salvo / enemy effects
+        const gameNow = this.gameTime;
+        const TARGET_MS = 1000 / 60;
+        const dtFactor  = cappedDelta / TARGET_MS; // 1.0 at 60 fps, 2.0 at 30 fps
 
         // Heal beams — fade and dispose
         for (let i = this.healBeams.length - 1; i >= 0; i--) {
@@ -589,10 +647,11 @@ export class CombatSystem {
                 // Grounded fire: refresh burn on nearby enemies
                 for (const en of enemies) {
                     if (en.hp <= 0) continue;
-                    const dist = Vector3.Distance(p.mesh.position, en.root.position.add(new Vector3(0, 1, 0)));
+                    const dist = this.enemyHitDist(p.mesh.position, en);
                     if (dist < FIREBALL_HIT_RADIUS) {
                         en.burnEnd = now + FIRE_BURN_DURATION;
-                        en.burnDamage = p.burnDamage;
+                        en.burnDamage = Math.round(p.burnDamage * this.damageMultiplier);
+                        en.lastHitChain = ['fire'];
                     }
                 }
                 continue;
@@ -607,15 +666,22 @@ export class CombatSystem {
                 if (p.element === 'fire') {
                     if (!p.hitEnemies.has(en)) {
                         p.hitEnemies.add(en);
-                        en.hp -= p.damage;
+                        en.lastHitChain = ['fire'];
+                        const fireDmg = Math.round(p.damage * this.damageMultiplier);
+                        en.hp -= fireDmg;
                         en.hpBar.scaling.x = Math.max(0, en.hp / en.maxHp);
+                        if (fireDmg > 0) this.onDamageDealt?.(en.root.position.add(new Vector3(0, 2.5, 0)), fireDmg, 'fire');
                         if (en.hp <= 0) onKill(en);
                     }
                     en.burnEnd = now + FIRE_BURN_DURATION;
-                    en.burnDamage = p.burnDamage;
+                    en.burnDamage = Math.round(p.burnDamage * this.damageMultiplier);
+                    en.lastHitChain = ['fire'];
                 } else {
-                    en.hp -= p.damage;
+                    en.lastHitChain = [p.element];
+                    const salvoDmg = Math.round(p.damage * this.damageMultiplier);
+                    en.hp -= salvoDmg;
                     en.hpBar.scaling.x = Math.max(0, en.hp / en.maxHp);
+                    if (salvoDmg > 0) this.onDamageDealt?.(en.root.position.add(new Vector3(0, 2.5, 0)), salvoDmg, p.element);
                     if (p.element === 'ice') {
                         en.slowEnd = now + ICE_SLOW_DURATION;
                         en.slowFactor = p.slowFactor;
@@ -634,6 +700,6 @@ export class CombatSystem {
             }
         }
 
-        this.updateLiveStages(enemies, onKill, onHealPlayer, playerPos);
+        this.updateLiveStages(enemies, onKill, onHealPlayer, playerPos, gameNow, now, dtFactor);
     }
 }

@@ -49,10 +49,12 @@ export class Player {
         }
     }
 
-    healHp(amount: number): void {
-        if (!this.alive || this.hp >= PLAYER_MAX_HP) return;
+    healHp(amount: number): number {
+        if (!this.alive || this.hp >= PLAYER_MAX_HP) return 0;
+        const prev = this.hp;
         this.hp = Math.min(PLAYER_MAX_HP, this.hp + amount);
         this.hud.updateHP(this.hp);
+        return this.hp - prev;
     }
 
     spendMana(amount: number): boolean {

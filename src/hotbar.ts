@@ -35,7 +35,7 @@ export class Hotbar {
         this.prevSpells = [null, null, null, null];
     }
 
-    update(spells: (Spell | null)[], lastCast: number[], cooldownMs: number[], playerMana: number, frozenAt?: number): void {
+    update(spells: (Spell | null)[], lastCast: number[], cooldownMs: number[], playerMana: number, manaCostFactor = 1.0, frozenAt?: number): void {
         const now = frozenAt ?? Date.now();
 
         for (let i = 0; i < 4; i++) {
@@ -75,7 +75,9 @@ export class Hotbar {
             const remaining   = Math.max(0, cdDuration - (now - lastCast[i]));
             const cdFraction  = cdDuration > 0 ? remaining / cdDuration : 0;
             const onCooldown  = remaining > 0;
-            const noMana      = playerMana < spell.manaCost;
+            const effectiveCost = Math.ceil(spell.manaCost * manaCostFactor);
+            this.manaEls[i].textContent = String(effectiveCost);
+            const noMana = playerMana < effectiveCost;
 
             // show mana warning only when not on cooldown (cooldown already blocks casting)
             const showManaWarn = noMana && !onCooldown;

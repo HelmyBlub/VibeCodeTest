@@ -2,7 +2,7 @@ import {
     Color3, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3,
 } from '@babylonjs/core';
 import {
-    BOSS_MAX_HP, BOSS_MELEE_DAMAGE, BOSS_MELEE_INTERVAL, BOSS_SCALE,
+    BOSS_MELEE_INTERVAL, BOSS_SCALE,
     ENEMY_MAX_HP, ENEMY_MELEE_DAMAGE, ENEMY_MELEE_INTERVAL, ENEMY_MELEE_RANGE, ENEMY_SPEED,
     FIRE_BURN_INTERVAL,
 } from './constants';
@@ -10,6 +10,7 @@ import type { Enemy } from './types';
 
 export class EnemyManager {
     readonly enemies: Enemy[] = [];
+    onKill?: (en: Enemy) => void;
 
     private readonly bodyMat:    StandardMaterial;
     private readonly headMat:    StandardMaterial;
@@ -18,6 +19,7 @@ export class EnemyManager {
     private readonly hpBgMat:    StandardMaterial;
     private readonly hpBarMat:   StandardMaterial;
     private readonly bossHpBarMat: StandardMaterial;
+    private readonly burnMat: StandardMaterial;
 
     private bossDeath: (() => void) | null = null;
 
@@ -46,6 +48,11 @@ export class EnemyManager {
         this.bossHpBarMat = new StandardMaterial('bossHpBarMat', scene);
         this.bossHpBarMat.diffuseColor = new Color3(0.7, 0.1, 0.9);
         this.bossHpBarMat.emissiveColor = new Color3(0.3, 0.0, 0.4);
+
+        this.burnMat = new StandardMaterial('burnMat', scene);
+        this.burnMat.diffuseColor  = new Color3(1.0, 0.35, 0.0);
+        this.burnMat.emissiveColor = new Color3(0.8, 0.25, 0.0);
+        this.burnMat.alpha = 0.55;
     }
 
     get normalCount(): number {
@@ -77,16 +84,22 @@ export class EnemyManager {
         hpBar.material = this.hpBarMat;
         hpBar.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
+        const burnIndicator = MeshBuilder.CreateSphere(`enBurn${id}`, { diameter: 0.75, segments: 6 }, this.scene);
+        burnIndicator.position.y = 0.8;
+        burnIndicator.parent = root;
+        burnIndicator.material = this.burnMat;
+        burnIndicator.isVisible = false;
+
         this.enemies.push({
-            root, eb, eh, hpBg, hpBar,
+            root, eb, eh, hpBg, hpBar, burnIndicator,
             hp: ENEMY_MAX_HP, maxHp: ENEMY_MAX_HP, isBoss: false,
-            lastMelee: 0,
+            lastMelee: 0, meleeDamage: ENEMY_MELEE_DAMAGE,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
             slowEnd: 0, slowFactor: 1,
         });
     }
 
-    spawnBoss(x: number, z: number, onDeath: () => void): void {
+    spawnBoss(x: number, z: number, hp: number, meleeDamage: number, onDeath: () => void): void {
         this.bossDeath = onDeath;
         const id = this.enemies.length;
         const root = new TransformNode(`boss${id}`, this.scene);
@@ -111,19 +124,28 @@ export class EnemyManager {
         hpBar.material = this.bossHpBarMat;
         hpBar.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
+        // burnIndicator in local space (root is scaled by BOSS_SCALE, so diameter/position are local)
+        const burnIndicator = MeshBuilder.CreateSphere(`bossBurn${id}`, { diameter: 0.8, segments: 6 }, this.scene);
+        burnIndicator.position.y = 0.8;
+        burnIndicator.parent = root;
+        burnIndicator.material = this.burnMat;
+        burnIndicator.isVisible = false;
+
         this.enemies.push({
-            root, eb, eh, hpBg, hpBar,
-            hp: BOSS_MAX_HP, maxHp: BOSS_MAX_HP, isBoss: true,
-            lastMelee: 0,
+            root, eb, eh, hpBg, hpBar, burnIndicator,
+            hp, maxHp: hp, isBoss: true,
+            lastMelee: 0, meleeDamage,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
             slowEnd: 0, slowFactor: 1,
         });
     }
 
     kill(en: Enemy): void {
+        this.onKill?.(en);
         const wasBoss = en.isBoss;
         en.eb.dispose(); en.eh.dispose();
-        en.hpBg.dispose(); en.hpBar.dispose(); en.root.dispose();
+        en.hpBg.dispose(); en.hpBar.dispose();
+        en.burnIndicator.dispose(); en.root.dispose();
         if (wasBoss) {
             this.bossDeath?.();
             this.bossDeath = null;
@@ -143,11 +165,12 @@ export class EnemyManager {
         for (const en of this.enemies) {
             if (en.hp <= 0) continue;
 
-            const meleeDmg = en.isBoss ? BOSS_MELEE_DAMAGE : ENEMY_MELEE_DAMAGE;
             const meleeInterval = en.isBoss ? BOSS_MELEE_INTERVAL : ENEMY_MELEE_INTERVAL;
 
             // fire: damage over time
-            if (now < en.burnEnd && now - en.lastBurnTick >= FIRE_BURN_INTERVAL) {
+            const burning = now < en.burnEnd;
+            en.burnIndicator.isVisible = burning;
+            if (burning && now - en.lastBurnTick >= FIRE_BURN_INTERVAL) {
                 en.lastBurnTick = now;
                 en.hp -= en.burnDamage;
                 en.hpBar.scaling.x = Math.max(0, en.hp / en.maxHp);
@@ -169,7 +192,7 @@ export class EnemyManager {
                 en.root.rotation.y = Math.atan2(step.x, step.z);
             } else if (now - en.lastMelee > meleeInterval) {
                 en.lastMelee = now;
-                onHitPlayer(meleeDmg);
+                onHitPlayer(en.meleeDamage);
             }
         }
     }

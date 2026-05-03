@@ -6,10 +6,13 @@ export interface Enemy {
     eh: Mesh;
     hpBg: Mesh;
     hpBar: Mesh;
+    burnIndicator: Mesh;
     hp: number;
     maxHp: number;
     isBoss: boolean;
     lastMelee: number;
+    meleeDamage: number;
+    lastHitChain?: StageElement[];
     // elemental effects
     burnEnd:      number;
     burnDamage:   number;

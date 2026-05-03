@@ -6,10 +6,25 @@ import { MANA_COST_FACTOR } from './constants';
 
 function cdMult(cooldown: number): number { return 0.7 + (cooldown / 10000) * 0.8; }
 
-export function calcManaCost(power: number, castTime: number): number {
+export function calcManaCost(
+    power: number, castTime: number,
+    mods?: { burnDuration?: number; jumpCount?: number; slowPercent?: number },
+): number {
     const pf = 0.3 + (power / 100) * 1.2;
     const cf = 1.5 - (castTime / 3000);
-    return Math.max(1, Math.round(20 * pf * cf * MANA_COST_FACTOR));
+    const base = Math.max(1, Math.round(20 * pf * cf * MANA_COST_FACTOR));
+    if (!mods) return base;
+    let elemMult = 1.0;
+    // Each second of burn above 1s adds 10% cost (1s→×1.0, 3s→×1.2, 10s→×1.9)
+    if (mods.burnDuration !== undefined)
+        elemMult *= 1 + (mods.burnDuration / 1000 - 1) * 0.10;
+    // Each chain jump adds 20% cost (0→×1.0, 2→×1.4, 8→×2.6)
+    if (mods.jumpCount !== undefined)
+        elemMult *= 1 + mods.jumpCount * 0.20;
+    // Each percent of slow adds 1% cost (0%→×1.0, 50%→×1.5, 90%→×1.9)
+    if (mods.slowPercent !== undefined)
+        elemMult *= 1 + mods.slowPercent * 0.01;
+    return Math.max(1, Math.round(base * elemMult));
 }
 export function calcDamage(power: number, cooldown: number): number {
     return Math.max(1, Math.round((10 + power * 0.3) * cdMult(cooldown)));
@@ -59,9 +74,14 @@ const STAGE_ELEM_DESC: Record<StageElement, string> = {
 };
 
 function fmt1(n: number): string { return (Math.round(n * 10) / 10).toFixed(1); }
+function fmtMana(n: number): string {
+    if (n >= 10000) return `${Math.round(n / 1000)}k`;
+    if (n >= 1000)  return `${(n / 1000).toFixed(1)}k`;
+    return String(Math.round(n));
+}
 
 function defaultStageDraft(): StageDraft {
-    return { element: 'carrier', power: 50, pitch: 45, yaw: 0, count: 1, spread: 0, yawSpread: 0,
+    return { element: 'carrier', power: 50, pitch: 0, yaw: 0, count: 1, spread: 0, yawSpread: 0,
              stationary: false, trigger: 'delay', triggerMs: 500, intervalMs: 1000, duration: 3000,
              burnDuration: 3000, slowPercent: 50, jumpCount: 2,
              offsetX: 0, offsetY: 0, offsetZ: 0, children: [] };
@@ -141,6 +161,8 @@ export class SpellCreator {
     private activeSlot = 0;
     private defaultElement: StageElement = 'fire';
     private unlockedTypes = new Set<StageElement>(['fire', 'ice', 'lightning', 'carrier', 'cloud'] as const);
+    private displayDmgMult  = 1.0;
+    private displayManaMult = 1.0;
 
     private stageRoots: StageDraft[]    = defaultStageRoots();
     private selectedStagePath: number[] | null = [0];
@@ -313,7 +335,12 @@ export class SpellCreator {
                     : 1 - 0.9 * (n.triggerMs / 10000);
                 return sum + this.chainMana(n.children, mult * carrierMult);
             } else {
-                return sum + calcManaCost(n.power, this.castTime) * mult + this.chainMana(n.children, mult);
+                const mods = {
+                    burnDuration: n.element === 'fire'      ? n.burnDuration : undefined,
+                    jumpCount:    n.element === 'lightning' ? n.jumpCount    : undefined,
+                    slowPercent:  n.element === 'ice'       ? n.slowPercent  : undefined,
+                };
+                return sum + calcManaCost(n.power, this.castTime, mods) * mult + this.chainMana(n.children, mult);
             }
         }, 0);
     }
@@ -660,7 +687,21 @@ export class SpellCreator {
                 const pad  = '&nbsp;&nbsp;'.repeat(depth);
                 const icon = STAGE_ELEM_ICON[s.element];
                 const isStaging = s.element === 'carrier' || s.element === 'cloud';
-                const dmg  = !isStaging ? ` · ${calcDamage(s.power, this.cooldown)} dmg` : '';
+                let dmg = '';
+                if (!isStaging && s.element !== 'heal') {
+                    const base = calcDamage(s.power, this.cooldown);
+                    const eff  = Math.round(base * this.displayDmgMult);
+                    dmg = this.displayDmgMult > 1.0
+                        ? ` · <span style="color:#ffdd88">${eff} dmg</span>`
+                        : ` · ${base} dmg`;
+                    if (s.element === 'fire') {
+                        const burnBase  = calcBurnDamage(s.power, this.cooldown);
+                        const burnEff   = Math.round(burnBase * this.displayDmgMult);
+                        const ticks     = Math.round(s.burnDuration / 500);
+                        const burnShow  = this.displayDmgMult > 1.0 ? burnEff : burnBase;
+                        dmg += ` · <span style="color:#ff9944">${burnShow}×${ticks} burn</span>`;
+                    }
+                }
                 const trig = isStaging && s.children.length
                     ? (s.element === 'cloud'
                         ? ` → ×${s.count} / ${s.intervalMs}ms`
@@ -671,8 +712,13 @@ export class SpellCreator {
             }
         };
         walk(this.stageRoots, 0);
+        const baseMana = Math.max(1, this.chainMana(this.stageRoots));
+        const effMana  = Math.ceil(baseMana * this.displayManaMult);
+        const manaHtml = this.displayManaMult < 0.999
+            ? `<strong style="color:#88ddff">${fmtMana(effMana)}</strong> <span style="color:#666;font-size:11px">(base ${fmtMana(baseMana)})</span>`
+            : `<strong>${fmtMana(baseMana)}</strong>`;
         this.previewEl.innerHTML = `
-<div class="sc-cost">Mana: <strong>${Math.max(1,this.chainMana(this.stageRoots))}</strong></div>
+<div class="sc-cost">Mana: ${manaHtml}</div>
 <div class="sc-proj-preview-list">${lines.join('')}</div>
 <div class="sc-desc">${ctLabel} · ${cdLabel}</div>`;
         this.commitToActiveSlot();
@@ -1092,6 +1138,12 @@ export class SpellCreator {
     toggle(): void { this.isOpen ? this.close() : this.open(); }
     get visible(): boolean { return this.isOpen; }
     getSlot(i: number): Spell | null { return this.slots[i] ?? null; }
+
+    setDisplayMultipliers(dmgMult: number, manaMult: number): void {
+        this.displayDmgMult  = dmgMult;
+        this.displayManaMult = manaMult;
+        if (this.isOpen) this.chainUpdatePreview();
+    }
 
     setDefaultElement(el: StageElement): void {
         this.defaultElement = el;

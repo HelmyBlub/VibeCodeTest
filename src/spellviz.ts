@@ -419,8 +419,10 @@ export class SpellVisualization {
 
         if (item.stationary) {
             const endpoint = this.buildBlob(item, origin, color, alpha, len * 0.55, pickable, tag);
-            // stationary stages pass their own direction to children (cloud inherits parent fwd unchanged)
-            const primaryDir = pitchYawDirVec(item.pitch, item.yaw, fwd, right);
+            // Strip Y so cloud's own pitch doesn't bias child directions — mirrors combat.ts fix
+            const pitched = pitchYawDirVec(item.pitch, item.yaw, fwd, right);
+            const flat = new Vector3(pitched.x, 0, pitched.z);
+            const primaryDir = flat.length() > 0.001 ? flat.normalize() : fwd.clone();
             return { endpoint, primaryDir };
         }
 
