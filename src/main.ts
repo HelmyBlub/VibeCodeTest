@@ -6,10 +6,14 @@ import { createInput } from './input';
 import { EnemyManager } from './enemy';
 import { CombatSystem } from './combat';
 import { HUD } from './hud';
-import { SpellCreator } from './spellcreator';
+import { SpellCreator, calcDamage, calcBurnDamage, calcManaCost } from './spellcreator';
 import { Hotbar } from './hotbar';
-import { MANA_REGEN_RATE } from './constants';
-import type { Spell } from './types';
+import { SpellbookPickup } from './spellbook';
+import { ChoiceUI } from './choiceui';
+import {
+    BOUNDARY, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
+} from './constants';
+import type { Spell, SpellElement, SpellStage, StageElement } from './types';
 
 const canvas = document.getElementById('renderCanvas') as HTMLCanvasElement;
 const engine = new Engine(canvas, true);
@@ -25,27 +29,60 @@ const enemyManager = new EnemyManager(scene);
 const combat       = new CombatSystem(scene);
 const spellCreator = new SpellCreator();
 const hotbar       = new Hotbar();
+const choiceUI     = new ChoiceUI();
+
+// ── Unlocks ───────────────────────────────────────────────────────────────────
+
+const ALL_TYPES: StageElement[] = ['fire', 'ice', 'lightning', 'heal', 'carrier', 'cloud'];
+const startElement = (['fire', 'ice', 'lightning'] as SpellElement[])[Math.floor(Math.random() * 3)];
+const unlocked = new Set<StageElement>([startElement]);
+
+spellCreator.setUnlockedTypes(unlocked);
+spellCreator.setDefaultElement(startElement);
+
+// ── Starter spell ─────────────────────────────────────────────────────────────
+
+function makeStarterStage(element: SpellElement): SpellStage {
+    const cooldown = 2000;
+    return {
+        element, power: 50, pitch: 0, yaw: 0,
+        count: 1, spread: 0, yawSpread: 0,
+        stationary: false, trigger: 'delay', triggerMs: 500, duration: 3000,
+        damage:      calcDamage(50, cooldown),
+        burnDamage:  element === 'fire'      ? calcBurnDamage(50, cooldown) : 0,
+        burnDuration: element === 'fire'     ? 3000 : undefined,
+        slowPercent:  element === 'ice'      ? 50   : undefined,
+        jumpCount:    element === 'lightning' ? 2    : undefined,
+        offsetX: 0, offsetY: 1.5, offsetZ: 0.5,
+        children: [],
+    };
+}
+
+const starterSpell: Spell = {
+    castTime: 0, cooldown: 2000,
+    manaCost: calcManaCost(50, 0),
+    projectiles: [],
+    stages: [makeStarterStage(startElement)],
+};
+spellCreator.slots[0] = starterSpell;
+
+// ── Cast state ────────────────────────────────────────────────────────────────
 
 const castBarEl    = document.getElementById('cast-bar')!;
 const castBarFill  = document.getElementById('cast-bar-fill')! as HTMLElement;
 const castBarLabel = document.getElementById('cast-bar-label')!;
 
-const spawnPoints: [number, number][] = [
-    [-18, -18], [18, -18], [-18, 18], [18, 18], [0, -22], [22, 0], [-22, 0],
-];
-spawnPoints.forEach(([x, z]) => enemyManager.spawn(x, z));
-
 interface CastState {
-    spell:      Spell;
-    slotIndex:  number;
-    startTime:  number;
-    duration:   number;
+    spell:     Spell;
+    slotIndex: number;
+    startTime: number;
+    duration:  number;
 }
 let casting: CastState | null = null;
 
-const slotLastCast   = [0, 0, 0, 0]; // timestamp of last cast per slot
-const slotCooldownMs = [0, 0, 0, 0]; // cooldown duration locked in at cast time
-let creatorOpenedAt  = 0;            // for freezing cooldowns while creator is open
+const slotLastCast   = [0, 0, 0, 0];
+const slotCooldownMs = [0, 0, 0, 0];
+let creatorOpenedAt  = 0;
 
 const INTERRUPT_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
 
@@ -65,6 +102,73 @@ function fireSpell(spell: Spell, slotIndex: number): void {
     slotCooldownMs[slotIndex] = spell.cooldown;
 }
 
+// ── Game loop state ───────────────────────────────────────────────────────────
+
+let spellbook:        SpellbookPickup | null = null;
+let choiceOpen        = false;
+let lastSpawnTime     = 0;
+let bossSpawnPending  = true;   // spawn first boss shortly after game start
+let bossSpawnAt       = Date.now() + 5000; // 5s initial delay
+
+function randomEdgePos(): { x: number; z: number } {
+    const edge = BOUNDARY - 3;
+    const side = Math.floor(Math.random() * 4);
+    const along = (Math.random() * 2 - 1) * edge;
+    switch (side) {
+        case 0: return { x: -edge, z: along };
+        case 1: return { x:  edge, z: along };
+        case 2: return { x: along, z: -edge };
+        default: return { x: along, z:  edge };
+    }
+}
+
+function spawnBossNow(): void {
+    bossSpawnPending = false;
+    const { x, z } = randomEdgePos();
+    enemyManager.spawnBoss(x, z, () => {
+        // Boss died — drop spellbook at its last known position
+        const boss = enemyManager.enemies.find(e => e.isBoss);
+        const dropPos = boss?.root.position ?? new Vector3(x, 0, z);
+        spellbook = new SpellbookPickup(scene, dropPos);
+    });
+}
+
+function handlePickup(): void {
+    if (!spellbook || choiceOpen) return;
+    const inRange = spellbook.update(player.position);
+    if (!inRange) return;
+
+    spellbook.dispose();
+    spellbook = null;
+    choiceOpen = true;
+
+    // Build 3 random choices from not-yet-unlocked types
+    const pool = ALL_TYPES.filter(t => !unlocked.has(t));
+    const choices: StageElement[] = [];
+    while (choices.length < 3 && pool.length > 0) {
+        const idx = Math.floor(Math.random() * pool.length);
+        choices.push(pool.splice(idx, 1)[0]);
+    }
+
+    if (choices.length === 0) {
+        // All types already unlocked — just spawn next boss
+        choiceOpen = false;
+        bossSpawnPending = true;
+        bossSpawnAt = Date.now() + 2000;
+        return;
+    }
+
+    choiceUI.show(choices, (picked) => {
+        unlocked.add(picked);
+        spellCreator.setUnlockedTypes(unlocked);
+        choiceOpen = false;
+        bossSpawnPending = true;
+        bossSpawnAt = Date.now() + 2000;
+    });
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+
 window.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
         const active = document.activeElement as HTMLElement | null;
@@ -79,7 +183,6 @@ window.addEventListener('keydown', e => {
         if (!spellCreator.visible) {
             creatorOpenedAt = Date.now();
         } else {
-            // shift lastCast forward by time spent in creator so CDs don't tick
             const paused = Date.now() - creatorOpenedAt;
             for (let i = 0; i < 4; i++) {
                 if (slotLastCast[i] > 0) slotLastCast[i] += paused;
@@ -89,7 +192,7 @@ window.addEventListener('keydown', e => {
         return;
     }
 
-    if (spellCreator.visible || !player.alive) return;
+    if (spellCreator.visible || !player.alive || choiceOpen) return;
 
     const isJump = e.key === ' ';
     if (casting && (INTERRUPT_KEYS.includes(e.key.toLowerCase()) || (isJump && player.onGround))) {
@@ -103,9 +206,7 @@ window.addEventListener('keydown', e => {
     const spell = spellCreator.getSlot(slotIndex);
     if (!spell) return;
 
-    // cooldown check uses the duration locked in at cast time (not the new spell's CD)
     if (Date.now() - slotLastCast[slotIndex] < slotCooldownMs[slotIndex]) return;
-
     if (!player.spendMana(spell.manaCost)) return;
 
     const duration = spell.castTime;
@@ -119,6 +220,8 @@ window.addEventListener('keydown', e => {
     }
 });
 
+// ── Render loop ───────────────────────────────────────────────────────────────
+
 scene.onBeforeRenderObservable.add(() => {
     const camToChar = player.position.subtract(camera.position);
     camToChar.y = 0;
@@ -127,11 +230,10 @@ scene.onBeforeRenderObservable.add(() => {
     const forward = camToChar.normalize();
     const right   = Vector3.Cross(Vector3.Up(), forward).normalize();
 
-    // always update hotbar; pass creatorOpenedAt when paused so the timer freezes visually
     hotbar.update(spellCreator.slots, slotLastCast, slotCooldownMs, player.mana,
         spellCreator.visible ? creatorOpenedAt : undefined);
 
-    if (spellCreator.visible) return;
+    if (spellCreator.visible || choiceOpen) return;
 
     const jumpInterrupt = input.keys[' '] && player.onGround;
     if (casting && (INTERRUPT_KEYS.some(k => input.keys[k]) || jumpInterrupt)) {
@@ -150,11 +252,29 @@ scene.onBeforeRenderObservable.add(() => {
 
     player.update(input.keys, forward, right);
     player.regenMana(MANA_REGEN_RATE / 60);
-    combat.update(enemyManager.enemies, en => enemyManager.kill(en));
+    combat.update(enemyManager.enemies, en => enemyManager.kill(en),
+        amt => player.healHp(amt), player.position);
 
     if (player.alive) {
         enemyManager.update(player.position, dmg => player.takeDamage(dmg));
     }
+
+    const now = Date.now();
+
+    // Normal enemy spawning — up to ENEMY_MAX_NORMAL at a time
+    if (now - lastSpawnTime > ENEMY_SPAWN_INTERVAL && enemyManager.normalCount < ENEMY_MAX_NORMAL) {
+        lastSpawnTime = now;
+        const { x, z } = randomEdgePos();
+        enemyManager.spawn(x, z);
+    }
+
+    // Boss spawning
+    if (bossSpawnPending && !enemyManager.bossAlive && now >= bossSpawnAt) {
+        spawnBossNow();
+    }
+
+    // Spellbook pickup
+    if (spellbook) handlePickup();
 
     camera.target.copyFrom(player.position);
     camera.target.y += 1;

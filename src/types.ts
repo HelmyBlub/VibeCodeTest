@@ -7,6 +7,8 @@ export interface Enemy {
     hpBg: Mesh;
     hpBar: Mesh;
     hp: number;
+    maxHp: number;
+    isBoss: boolean;
     lastMelee: number;
     // elemental effects
     burnEnd:      number;
@@ -33,7 +35,7 @@ export interface Fireball {
     slowFactor:  number;   // ice: per-projectile speed multiplier on enemy (power-scaled)
 }
 
-export type SpellElement = 'fire' | 'ice' | 'lightning';
+export type SpellElement = 'fire' | 'ice' | 'lightning' | 'heal';
 export type StageElement = SpellElement | 'carrier' | 'cloud';
 export type StageTrigger = 'delay' | 'impact' | 'interval';
 
@@ -54,6 +56,8 @@ export interface SpellStage {
     burnDuration?: number;    // fire: DoT duration ms
     slowPercent?:  number;    // ice: slow strength 0–90 (%)
     jumpCount?:    number;    // lightning: chain jumps 0–8
+    healAmount?:   number;    // heal: total HP budget
+    healRadius?:   number;    // heal: AoE radius
     offsetX?:      number;    // spawn offset from parent (world units)
     offsetY?:      number;
     offsetZ?:      number;

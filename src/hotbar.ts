@@ -13,6 +13,7 @@ const ELEMENT_EMOJI: Record<SpellElement, string> = {
     fire:      '🔥',
     ice:       '❄',
     lightning: '⚡',
+    heal:      '💚',
 };
 
 export class Hotbar {

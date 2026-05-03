@@ -42,10 +42,17 @@ export class Player {
         if (!this.alive) return;
         this.hp = Math.max(0, this.hp - amount);
         this.hud.updateHP(this.hp);
+        this.hud.showHitFlash();
         if (this.hp <= 0) {
             this.alive = false;
             this.hud.showGameOver();
         }
+    }
+
+    healHp(amount: number): void {
+        if (!this.alive || this.hp >= PLAYER_MAX_HP) return;
+        this.hp = Math.min(PLAYER_MAX_HP, this.hp + amount);
+        this.hud.updateHP(this.hp);
     }
 
     spendMana(amount: number): boolean {

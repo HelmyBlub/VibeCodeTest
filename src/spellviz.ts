@@ -35,6 +35,7 @@ const ELEM_COLOR: Record<StageElement, Color3> = {
     fire:      new Color3(1,    0.40, 0.05),
     ice:       new Color3(0.15, 0.70, 1),
     lightning: new Color3(1,    0.85, 0.1),
+    heal:      new Color3(0.20, 0.95, 0.40),
     carrier:   new Color3(0.55, 0.55, 0.70),
     cloud:     new Color3(0.40, 0.70, 0.90),
 };

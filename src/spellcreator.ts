@@ -17,6 +17,9 @@ export function calcDamage(power: number, cooldown: number): number {
 export function calcBurnDamage(power: number, cooldown: number): number {
     return Math.max(1, Math.round((3 + power * 0.05) * cdMult(cooldown)));
 }
+export function calcHealAmount(power: number, cooldown: number): number {
+    return Math.max(10, Math.round((20 + power * 1.8) * cdMult(cooldown)));
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,14 +47,15 @@ interface StageDraft {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const ELEMENT_EMOJI: Record<SpellElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡' };
-const STAGE_ELEM_ICON: Record<StageElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡', carrier: '→', cloud: '☁' };
+const ELEMENT_EMOJI: Record<SpellElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡', heal: '💚' };
+const STAGE_ELEM_ICON: Record<StageElement, string> = { fire: '🔥', ice: '❄', lightning: '⚡', heal: '💚', carrier: '→', cloud: '☁' };
 const STAGE_ELEM_DESC: Record<StageElement, string> = {
     carrier:   'Projectile that triggers child stages after a set delay.',
     cloud:     'Stationary area that fires child stages on a repeating interval.',
     fire:      'Burns the target, dealing damage over time.',
     ice:       'Slows the target\'s movement speed.',
     lightning: 'Arcs to nearby enemies on hit.',
+    heal:      'Floats forward and pulses healing to nearby allies and enemies.',
 };
 
 function fmt1(n: number): string { return (Math.round(n * 10) / 10).toFixed(1); }
@@ -63,9 +67,9 @@ function defaultStageDraft(): StageDraft {
              offsetX: 0, offsetY: 0, offsetZ: 0, children: [] };
 }
 
-function defaultStageRoots(): StageDraft[] {
+function defaultStageRoots(element: StageElement = 'fire'): StageDraft[] {
     return [{
-        element: 'fire', power: 50, pitch: 0, yaw: 0, count: 1, spread: 0, yawSpread: 0,
+        element, power: 50, pitch: 0, yaw: 0, count: 1, spread: 0, yawSpread: 0,
         stationary: false, trigger: 'delay', triggerMs: 500, intervalMs: 1000, duration: 3000,
         burnDuration: 3000, slowPercent: 50, jumpCount: 2,
         offsetX: 0, offsetY: 0, offsetZ: 0, children: [],
@@ -80,11 +84,13 @@ function draftToStage(d: StageDraft, cooldown: number, castTime: number): SpellS
         stationary, trigger: d.trigger,
         triggerMs: d.element === 'cloud' ? d.intervalMs : d.triggerMs,
         duration: d.duration,
-        damage:       d.element !== 'carrier' && d.element !== 'cloud' ? calcDamage(d.power, cooldown) : 0,
-        burnDamage:   d.element === 'fire'  ? calcBurnDamage(d.power, cooldown) : 0,
+        damage:       (d.element !== 'carrier' && d.element !== 'cloud' && d.element !== 'heal') ? calcDamage(d.power, cooldown) : 0,
+        burnDamage:   d.element === 'fire'      ? calcBurnDamage(d.power, cooldown) : 0,
         burnDuration: d.element === 'fire'      ? d.burnDuration : undefined,
         slowPercent:  d.element === 'ice'       ? d.slowPercent  : undefined,
         jumpCount:    d.element === 'lightning' ? d.jumpCount    : undefined,
+        healAmount:   d.element === 'heal'      ? calcHealAmount(d.power, cooldown) : undefined,
+        healRadius:   d.element === 'heal'      ? 2.0 + d.power * 0.02 : undefined,
         offsetX: d.offsetX, offsetY: d.offsetY, offsetZ: d.offsetZ,
         children:     d.children.map(c => draftToStage(c, cooldown, castTime)),
     };
@@ -133,6 +139,8 @@ export class SpellCreator {
     private castTime = 0;
     private cooldown = 2000;
     private activeSlot = 0;
+    private defaultElement: StageElement = 'fire';
+    private unlockedTypes = new Set<StageElement>(['fire', 'ice', 'lightning', 'carrier', 'cloud'] as const);
 
     private stageRoots: StageDraft[]    = defaultStageRoots();
     private selectedStagePath: number[] | null = [0];
@@ -327,7 +335,7 @@ export class SpellCreator {
         } else {
             this.castTime   = 0;
             this.cooldown   = 2000;
-            this.stageRoots = defaultStageRoots();
+            this.stageRoots = defaultStageRoots(this.defaultElement);
         }
         this.selectedStagePath = this.stageRoots.length ? [0] : null;
         this.castSlider.value  = String(this.castTime);  this.castInput.value = fmt1(this.castTime / 1000);
@@ -411,9 +419,10 @@ export class SpellCreator {
         const ps = this.selectedStagePath.join(',');
         const el = s.element;
 
-        const elemOptions = (['carrier', 'cloud', 'fire', 'ice', 'lightning'] as StageElement[]).map(e =>
-            `<button class="sc-btn sc-stage-elem-btn${el===e?' active':''}" data-path="${ps}" data-val="${e}" data-elem-desc="${STAGE_ELEM_DESC[e]}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`
-        ).join('');
+        const elemOptions = (['carrier', 'cloud', 'fire', 'heal', 'ice', 'lightning'] as StageElement[])
+            .filter(e => this.unlockedTypes.has(e))
+            .map(e => `<button class="sc-btn sc-stage-elem-btn${el===e?' active':''}" data-path="${ps}" data-val="${e}" data-elem-desc="${STAGE_ELEM_DESC[e]}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`)
+            .join('');
         const elemDropdown = `
 <div class="sc-elem-wrap">
   <button class="sc-btn sc-elem-main" style="font-size:14px;padding:5px 14px;font-weight:600">${STAGE_ELEM_ICON[el]} ${el[0].toUpperCase()+el.slice(1)}</button>
@@ -731,9 +740,10 @@ export class SpellCreator {
             const p = document.createElement('div');
             p.id = 'sc-add-picker';
             p.className = 'sc-add-picker';
-            const opts = (['carrier', 'cloud', 'fire', 'ice', 'lightning'] as StageElement[]).map(e =>
-                `<button class="sc-btn sc-add-pick-btn" data-val="${e}" data-elem-desc="${STAGE_ELEM_DESC[e]}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`
-            ).join('');
+            const opts = (['carrier', 'cloud', 'fire', 'heal', 'ice', 'lightning'] as StageElement[])
+                .filter(e => this.unlockedTypes.has(e))
+                .map(e => `<button class="sc-btn sc-add-pick-btn" data-val="${e}" data-elem-desc="${STAGE_ELEM_DESC[e]}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`)
+                .join('');
             p.innerHTML = `<div class="sc-elem-options">${opts}</div><div class="sc-elem-hint"></div>`;
             document.body.appendChild(p);
         }
@@ -816,9 +826,6 @@ export class SpellCreator {
                 this.vizHintEl.textContent = 'Drag to orbit · F/R: rotate · G: move · G+Shift: vertical';
         };
 
-        this.renderStageTree();
-        this.renderStageEditor();
-        this.chainUpdatePreview();
     }
 
     private showAddPicker(anchor: HTMLElement, pendingPath: number[] | null): void {
@@ -1070,9 +1077,42 @@ export class SpellCreator {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    open():   void { this.isOpen = true;  this.overlay.style.display = 'flex'; this.viz.start(); this.updateViz(); }
+    open():   void {
+        this.isOpen = true;
+        this.overlay.style.display = 'flex';
+        this.viz.start();
+        // Re-render every open so element picker and stage tree reflect current unlock/element state
+        this.renderSlotTabs();
+        this.renderStageTree();
+        this.renderStageEditor();
+        this.chainUpdatePreview();
+        this.updateViz();
+    }
     close():  void { this.isOpen = false; this.overlay.style.display = 'none'; this.viz.stop(); }
     toggle(): void { this.isOpen ? this.close() : this.open(); }
     get visible(): boolean { return this.isOpen; }
     getSlot(i: number): Spell | null { return this.slots[i] ?? null; }
+
+    setDefaultElement(el: StageElement): void {
+        this.defaultElement = el;
+        // Reset current stageRoots to the new default if the active slot is empty
+        if (!this.slots[this.activeSlot]) {
+            this.stageRoots = defaultStageRoots(this.defaultElement);
+            this.selectedStagePath = [0];
+            if (this.isOpen) { this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); }
+        }
+    }
+
+    setUnlockedTypes(types: ReadonlySet<StageElement>): void {
+        this.unlockedTypes = new Set(types);
+        // Rebuild add-picker options with new unlock set
+        const picker = document.getElementById('sc-add-picker');
+        if (picker) {
+            const opts = (['carrier', 'cloud', 'fire', 'heal', 'ice', 'lightning'] as StageElement[])
+                .filter(e => this.unlockedTypes.has(e))
+                .map(e => `<button class="sc-btn sc-add-pick-btn" data-val="${e}" data-elem-desc="${STAGE_ELEM_DESC[e]}">${STAGE_ELEM_ICON[e]} ${e[0].toUpperCase()+e.slice(1)}</button>`)
+                .join('');
+            picker.querySelector('.sc-elem-options')!.innerHTML = opts;
+        }
+    }
 }

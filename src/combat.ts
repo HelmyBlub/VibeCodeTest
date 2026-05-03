@@ -1,10 +1,11 @@
 import {
-    Color3, Mesh, MeshBuilder, PointLight, Scene, StandardMaterial, Vector3,
+    Color3, Mesh, MeshBuilder, PointLight, Quaternion, Scene, StandardMaterial, Vector3,
 } from '@babylonjs/core';
 import {
-    ENEMY_MAX_HP,
     FIRE_BURN_DURATION, FIRE_GRAVITY, FIRE_MAX_DURATION, FIRE_MIN_DURATION,
     FIRE_SPEED, FIREBALL_HIT_RADIUS, GROUND_Y,
+    HEAL_DRAG, HEAL_FALL_RATE, HEAL_MAX_DURATION, HEAL_MIN_HEIGHT,
+    HEAL_PASSIVE_DECAY, HEAL_PER_TICK, HEAL_RADIUS, HEAL_SPEED, HEAL_TICK_INTERVAL,
     ICE_DRAG, ICE_FALL_RATE, ICE_MAX_DURATION, ICE_MAX_FALL_SPEED, ICE_MAX_SLOW, ICE_MIN_SLOW,
     ICE_SLOW_DURATION, ICE_SPEED,
     LIGHTNING_BASE_RANGE, LIGHTNING_CHAIN_MULT, LIGHTNING_CHAIN_RANGE,
@@ -22,12 +23,14 @@ const ELEMENT_COLOR: Record<SpellElement, [Color3, Color3]> = {
     fire:      [new Color3(1, 0.4, 0),    new Color3(1, 0.3, 0)],
     ice:       [new Color3(0, 0.6, 1),    new Color3(0, 0.8, 1)],
     lightning: [new Color3(1, 0.85, 0.1), new Color3(1, 0.9, 0.2)],
+    heal:      [new Color3(0.2, 0.95, 0.4), new Color3(0.1, 0.7, 0.25)],
 };
 
 const STAGE_COLOR: Record<StageElement, [Color3, Color3]> = {
     fire:      ELEMENT_COLOR.fire,
     ice:       ELEMENT_COLOR.ice,
     lightning: ELEMENT_COLOR.lightning,
+    heal:      ELEMENT_COLOR.heal,
     carrier:   [new Color3(0.6, 0.6, 0.85), new Color3(0.4, 0.4, 0.65)],
     cloud:     [new Color3(0.4, 0.7,  0.90), new Color3(0.3, 0.5, 0.70)],
 };
@@ -35,6 +38,7 @@ const STAGE_COLOR: Record<StageElement, [Color3, Color3]> = {
 // ── Internal types ────────────────────────────────────────────────────────────
 
 interface ChainFlash { mesh: Mesh; light: PointLight; life: number; }
+interface HealBeam   { mesh: Mesh; life: number; maxLife: number; }
 
 interface LiveStage {
     config:     SpellStage;   // children embedded in config.children
@@ -51,6 +55,7 @@ interface LiveStage {
     spawnPos:   Vector3;  // lightning: range check origin
     maxRange:   number;   // lightning: dispose distance
     initDir:    Vector3;  // world-space direction at spawn, used as forward reference for children
+    healGiven:  number;   // heal: cumulative HP dispensed (includes passive decay)
 }
 
 // ── CombatSystem ──────────────────────────────────────────────────────────────
@@ -59,6 +64,7 @@ export class CombatSystem {
     private readonly projectiles: Fireball[]  = [];
     private readonly liveStages:  LiveStage[] = [];
     private readonly flashes:     ChainFlash[] = [];
+    private readonly healBeams:   HealBeam[]  = [];
     private readonly mats: Record<SpellElement, StandardMaterial>;
     private readonly flashMat: StandardMaterial;
 
@@ -67,10 +73,12 @@ export class CombatSystem {
             fire:      this.makeMat('matFire',      ELEMENT_COLOR.fire),
             ice:       this.makeMat('matIce',       ELEMENT_COLOR.ice),
             lightning: this.makeMat('matLightning', ELEMENT_COLOR.lightning),
+            heal:      this.makeMat('matHeal',      ELEMENT_COLOR.heal),
         };
         this.flashMat = new StandardMaterial('chainFlashMat', scene);
         this.flashMat.emissiveColor = new Color3(1, 1, 0.3);
         this.flashMat.diffuseColor  = new Color3(1, 0.9, 0.1);
+
     }
 
     private makeMat(id: string, [diffuse, emissive]: [Color3, Color3]): StandardMaterial {
@@ -133,6 +141,11 @@ export class CombatSystem {
                 chainsLeft  = Math.floor(t * LIGHTNING_MAX_CHAINS);
                 slowFactor  = 1;
                 break;
+            case 'heal':
+                vel         = direction.scale(HEAL_SPEED);
+                maxDuration = HEAL_MAX_DURATION;
+                maxRange    = 0; chainsLeft = 0; slowFactor = 1;
+                break;
         }
 
         this.projectiles.push({
@@ -153,6 +166,31 @@ export class CombatSystem {
         this.flashes.push({ mesh, light, life: 10 });
     }
 
+    private spawnHealBeam(from: Vector3, to: Vector3): void {
+        const height = Vector3.Distance(from, to);
+        if (height < 0.1) return;
+        const mid = Vector3.Lerp(from, to, 0.5);
+        const dir = to.subtract(from).normalize();
+        const mesh = MeshBuilder.CreateCylinder('healBeam',
+            { height, diameterTop: 0.07, diameterBottom: 0.07, tessellation: 5 }, this.scene);
+        mesh.position = mid;
+        // Each beam gets its own material so fades don't interfere
+        const mat = new StandardMaterial('healBeamMat_i', this.scene);
+        mat.emissiveColor = new Color3(0.2, 1.0, 0.45);
+        mat.diffuseColor  = new Color3(0.1, 0.7, 0.25);
+        mat.alpha = 0.75;
+        mesh.material = mat;
+        // Rotate local Y-axis to point along dir
+        const yAxis = new Vector3(0, 1, 0);
+        const cross = Vector3.Cross(yAxis, dir);
+        if (cross.length() > 0.001) {
+            const angle = Math.acos(Math.max(-1, Math.min(1, Vector3.Dot(yAxis, dir))));
+            mesh.rotationQuaternion = Quaternion.RotationAxis(cross.normalize(), angle);
+        }
+        const BEAM_LIFE = 12; // ~200ms at 60fps
+        this.healBeams.push({ mesh, life: BEAM_LIFE, maxLife: BEAM_LIFE });
+    }
+
     private applyLightningChains(
         p: Fireball, primary: Enemy, enemies: Enemy[], onKill: (en: Enemy) => void,
     ): void {
@@ -168,7 +206,7 @@ export class CombatSystem {
             if (!nearest) break;
             const chainDmg = Math.round(p.damage * LIGHTNING_CHAIN_MULT);
             nearest.hp -= chainDmg;
-            nearest.hpBar.scaling.x = Math.max(0, nearest.hp / ENEMY_MAX_HP);
+            nearest.hpBar.scaling.x = Math.max(0, nearest.hp / nearest.maxHp);
             if (nearest.hp <= 0) onKill(nearest);
             this.spawnChainFlash(nearest.root.position.add(new Vector3(0, 2.5, 0)));
             chained.add(nearest); source = nearest; remaining--;
@@ -233,6 +271,7 @@ export class CombatSystem {
             spawnPos:   pos.clone(),
             maxRange,
             initDir:    dir.clone(),
+            healGiven:  0,
         });
     }
 
@@ -284,11 +323,21 @@ export class CombatSystem {
                 ls.vel.y = Math.max(-ICE_MAX_FALL_SPEED, ls.vel.y - ICE_FALL_RATE);
                 ls.vel.x *= ICE_DRAG; ls.vel.z *= ICE_DRAG;
                 break;
-            // lightning and none: constant velocity, no changes
+            case 'heal':
+                // Gently fall then hover — never truly grounds
+                ls.vel.y -= HEAL_FALL_RATE;
+                ls.vel.x *= HEAL_DRAG; ls.vel.z *= HEAL_DRAG;
+                if (ls.mesh.position.y + ls.vel.y < HEAL_MIN_HEIGHT) {
+                    ls.vel.y = 0;
+                    ls.mesh.position.y = HEAL_MIN_HEIGHT;
+                }
+                break;
+            // lightning, carrier, cloud: constant velocity
         }
         ls.mesh.position.addInPlace(ls.vel);
         ls.light.position.copyFrom(ls.mesh.position);
-        if (ls.mesh.position.y <= GROUND_Y) {
+        // Non-heal projectiles ground at GROUND_Y
+        if (ls.config.element !== 'heal' && ls.mesh.position.y <= GROUND_Y) {
             ls.mesh.position.y = GROUND_Y;
             ls.vel.setAll(0);
             ls.grounded = true;
@@ -322,7 +371,7 @@ export class CombatSystem {
                     if (!nearest) break;
                     const cdmg = Math.round(ls.config.damage * LIGHTNING_CHAIN_MULT);
                     nearest.hp -= cdmg;
-                    nearest.hpBar.scaling.x = Math.max(0, nearest.hp / ENEMY_MAX_HP);
+                    nearest.hpBar.scaling.x = Math.max(0, nearest.hp / nearest.maxHp);
                     if (nearest.hp <= 0) onKill(nearest);
                     this.spawnChainFlash(nearest.root.position.add(new Vector3(0, 2.5, 0)));
                     chained.add(nearest); source = nearest; remaining--;
@@ -333,7 +382,10 @@ export class CombatSystem {
         }
     }
 
-    private updateLiveStages(enemies: Enemy[], onKill: (en: Enemy) => void): void {
+    private updateLiveStages(
+        enemies: Enemy[], onKill: (en: Enemy) => void,
+        onHealPlayer?: (amt: number) => void, playerPos?: Vector3,
+    ): void {
         const now = Date.now();
 
         for (let i = this.liveStages.length - 1; i >= 0; i--) {
@@ -361,6 +413,45 @@ export class CombatSystem {
                 if (now - ls.lastFire >= cfg.triggerMs) {
                     ls.lastFire = now; ls.fireCount++; this.triggerNext(ls);
                 }
+            } else if (cfg.element === 'heal') {
+                // ── Heal orb: hovers, pulses AoE heal, passive budget decay ─────
+                const budget = (cfg.healAmount ?? 1);
+                // Passive decay: drain budget over time even without healing
+                ls.healGiven += (budget * HEAL_PASSIVE_DECAY) / 60;
+                if (ls.healGiven >= budget || age >= HEAL_MAX_DURATION) {
+                    this.disposeLiveStage(ls, i); continue;
+                }
+                // Scale orb down and dim light as budget drains
+                const remaining = Math.max(0, 1 - ls.healGiven / budget);
+                const orbScale  = 0.25 + remaining * 0.75;
+                ls.mesh.scaling.setAll(orbScale);
+                ls.light.intensity = remaining * 1.5;
+
+                if (now - ls.lastFire >= HEAL_TICK_INTERVAL) {
+                    ls.lastFire = now;
+                    const radius = cfg.healRadius ?? HEAL_RADIUS;
+                    const orbCenter = ls.mesh.position;
+                    // Heal enemies in range
+                    for (const en of enemies) {
+                        if (en.hp <= 0 || en.hp >= en.maxHp) continue;
+                        const d = Vector3.Distance(orbCenter, en.root.position.add(new Vector3(0, 1, 0)));
+                        if (d >= radius) continue;
+                        const healed = Math.min(HEAL_PER_TICK, en.maxHp - en.hp);
+                        en.hp += healed;
+                        en.hpBar.scaling.x = en.hp / en.maxHp;
+                        ls.healGiven += healed;
+                    }
+                    // Heal player if in range
+                    if (playerPos && onHealPlayer) {
+                        const playerCenter = playerPos.add(new Vector3(0, 1.0, 0));
+                        const dp = Vector3.Distance(orbCenter, playerCenter);
+                        if (dp < radius) {
+                            onHealPlayer(HEAL_PER_TICK);
+                            ls.healGiven += HEAL_PER_TICK;
+                            this.spawnHealBeam(orbCenter, playerCenter);
+                        }
+                    }
+                }
             } else if (!cfg.stationary) {
                 // ── Elemental projectile: element-specific expiry, no chaining ─
                 if (cfg.element === 'ice' && ls.grounded) {
@@ -385,7 +476,7 @@ export class CombatSystem {
 
                     ls.hitEnemies.add(en);
                     en.hp -= cfg.damage;
-                    en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
+                    en.hpBar.scaling.x = Math.max(0, en.hp / en.maxHp);
                     this.applyStageHitEffect(ls, en, enemies, onKill, now);
                     if (en.hp <= 0) onKill(en);
                     // lightning stops on first hit; fire/ice pass through
@@ -420,15 +511,31 @@ export class CombatSystem {
             case 'fire':      return FIRE_SPEED;
             case 'ice':       return ICE_SPEED;
             case 'lightning': return LIGHTNING_SPEED;
+            case 'heal':      return HEAL_SPEED;
             case 'carrier':   return STAGE_CARRIER_SPEED;
-        case 'cloud':     return 0;
+            case 'cloud':     return 0;
         }
     }
 
     // ── Main update ───────────────────────────────────────────────────────────
 
-    update(enemies: Enemy[], onKill: (en: Enemy) => void): void {
+    update(
+        enemies: Enemy[], onKill: (en: Enemy) => void,
+        onHealPlayer?: (amt: number) => void, playerPos?: Vector3,
+    ): void {
         const now = Date.now();
+
+        // Heal beams — fade and dispose
+        for (let i = this.healBeams.length - 1; i >= 0; i--) {
+            const b = this.healBeams[i];
+            if (--b.life <= 0) {
+                (b.mesh.material as StandardMaterial | null)?.dispose();
+                b.mesh.dispose();
+                this.healBeams.splice(i, 1);
+            } else {
+                (b.mesh.material as StandardMaterial).alpha = 0.75 * (b.life / b.maxLife);
+            }
+        }
 
         // Chain flashes
         for (let i = this.flashes.length - 1; i >= 0; i--) {
@@ -501,14 +608,14 @@ export class CombatSystem {
                     if (!p.hitEnemies.has(en)) {
                         p.hitEnemies.add(en);
                         en.hp -= p.damage;
-                        en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
+                        en.hpBar.scaling.x = Math.max(0, en.hp / en.maxHp);
                         if (en.hp <= 0) onKill(en);
                     }
                     en.burnEnd = now + FIRE_BURN_DURATION;
                     en.burnDamage = p.burnDamage;
                 } else {
                     en.hp -= p.damage;
-                    en.hpBar.scaling.x = Math.max(0, en.hp / ENEMY_MAX_HP);
+                    en.hpBar.scaling.x = Math.max(0, en.hp / en.maxHp);
                     if (p.element === 'ice') {
                         en.slowEnd = now + ICE_SLOW_DURATION;
                         en.slowFactor = p.slowFactor;
@@ -527,6 +634,6 @@ export class CombatSystem {
             }
         }
 
-        this.updateLiveStages(enemies, onKill);
+        this.updateLiveStages(enemies, onKill, onHealPlayer, playerPos);
     }
 }

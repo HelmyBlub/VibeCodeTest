@@ -16,6 +16,15 @@ export const ENEMY_SPEED = 0.028;
 export const ENEMY_MELEE_RANGE = 1.8;
 export const ENEMY_MELEE_DAMAGE = 10;
 export const ENEMY_MELEE_INTERVAL = 1000;
+export const ENEMY_MAX_NORMAL = 20;
+export const ENEMY_SPAWN_INTERVAL = 3000; // ms between normal enemy spawns
+
+// Boss
+export const BOSS_MAX_HP = 300;
+export const BOSS_SCALE = 2.5;
+export const BOSS_MELEE_DAMAGE = 20;
+export const BOSS_MELEE_INTERVAL = 1500;
+export const BOSS_PICKUP_RANGE = 2.0; // units to trigger spellbook pickup
 
 // Combat
 export const FIREBALL_HIT_RADIUS = 1.0;
@@ -59,6 +68,17 @@ export const ICE_SLOW_DURATION = 3000; // ms
 // Lightning chain
 export const LIGHTNING_CHAIN_RANGE = 8;   // units between enemies for each chain jump
 export const LIGHTNING_CHAIN_MULT  = 0.6; // damage fraction per chain jump
+
+// Heal element
+export const HEAL_SPEED           = 0.22;  // units/frame (slow, snow-like)
+export const HEAL_FALL_RATE       = 0.0008; // gentle gravity
+export const HEAL_MIN_HEIGHT      = 0.45;  // hover above ground
+export const HEAL_DRAG            = 0.985; // horizontal momentum decay
+export const HEAL_TICK_INTERVAL   = 600;   // ms between heal pulses
+export const HEAL_PER_TICK        = 8;     // HP healed per entity per pulse
+export const HEAL_RADIUS          = 3.5;   // AoE radius in world units
+export const HEAL_MAX_DURATION    = 12000; // ms hard fallback expiry
+export const HEAL_PASSIVE_DECAY   = 0.12;  // fraction of healAmount depleted per second passively
 
 // Staged spell system
 export const STAGE_CARRIER_SPEED = 0.3;  // units/frame for 'none' element stages
