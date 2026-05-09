@@ -3,23 +3,26 @@ import {
 } from '@babylonjs/core';
 import {
     BOSS_MELEE_INTERVAL, BOSS_SCALE,
+    BRUTE_HP_MULT, BRUTE_SPEED,
     ENEMY_MAX_HP, ENEMY_MELEE_DAMAGE, ENEMY_MELEE_INTERVAL, ENEMY_MELEE_RANGE, ENEMY_SPEED,
     FIRE_BURN_INTERVAL,
 } from './constants';
-import type { Enemy } from './types';
+import type { Enemy, EnemyType } from './types';
 
 export class EnemyManager {
     readonly enemies: Enemy[] = [];
     onKill?: (en: Enemy) => void;
 
-    private readonly bodyMat:    StandardMaterial;
-    private readonly headMat:    StandardMaterial;
-    private readonly bossBodyMat: StandardMaterial;
-    private readonly bossHeadMat: StandardMaterial;
-    private readonly hpBgMat:    StandardMaterial;
-    private readonly hpBarMat:   StandardMaterial;
-    private readonly bossHpBarMat: StandardMaterial;
-    private readonly burnMat: StandardMaterial;
+    private readonly bodyMat:       StandardMaterial;
+    private readonly headMat:       StandardMaterial;
+    private readonly bruteBodyMat:  StandardMaterial;
+    private readonly bruteHeadMat:  StandardMaterial;
+    private readonly bossBodyMat:   StandardMaterial;
+    private readonly bossHeadMat:   StandardMaterial;
+    private readonly hpBgMat:       StandardMaterial;
+    private readonly hpBarMat:      StandardMaterial;
+    private readonly bossHpBarMat:  StandardMaterial;
+    private readonly burnMat:       StandardMaterial;
 
     private bossDeath: (() => void) | null = null;
 
@@ -29,6 +32,12 @@ export class EnemyManager {
 
         this.headMat = new StandardMaterial('enHeadMat', scene);
         this.headMat.diffuseColor = new Color3(0.6, 0.3, 0.2);
+
+        this.bruteBodyMat = new StandardMaterial('bruteBodyMat', scene);
+        this.bruteBodyMat.diffuseColor = new Color3(0.65, 0.3, 0.05);
+
+        this.bruteHeadMat = new StandardMaterial('bruteHeadMat', scene);
+        this.bruteHeadMat.diffuseColor = new Color3(0.55, 0.25, 0.08);
 
         this.bossBodyMat = new StandardMaterial('bossBodyMat', scene);
         this.bossBodyMat.diffuseColor = new Color3(0.5, 0.05, 0.7);
@@ -63,36 +72,49 @@ export class EnemyManager {
         return this.enemies.some(e => e.isBoss && e.hp > 0);
     }
 
-    spawn(x: number, z: number): void {
+    spawn(x: number, z: number, baseHp = ENEMY_MAX_HP, type: EnemyType = 'simple'): void {
+        const isBrute = type === 'brute';
+        const hp      = isBrute ? Math.round(baseHp * BRUTE_HP_MULT) : baseHp;
+        const speed   = isBrute ? BRUTE_SPEED : ENEMY_SPEED;
+
         const id = this.enemies.length;
         const root = new TransformNode(`en${id}`, this.scene);
         root.position = new Vector3(x, 0, z);
 
-        const eb = MeshBuilder.CreateCapsule(`enB${id}`, { height: 1.6, radius: 0.3, tessellation: 10 }, this.scene);
-        eb.position.y = 0.8; eb.parent = root; eb.material = this.bodyMat;
+        const capsuleR = isBrute ? 0.52 : 0.3;
+        const capsuleH = isBrute ? 1.9  : 1.6;
+        const headD    = isBrute ? 0.62 : 0.45;
+        const headY    = isBrute ? 2.15 : 1.85;
+        const hpBarY   = isBrute ? 3.0  : 2.6;
+        const burnD    = isBrute ? 1.05 : 0.75;
 
-        const eh = MeshBuilder.CreateSphere(`enH${id}`, { diameter: 0.45, segments: 6 }, this.scene);
-        eh.position.y = 1.85; eh.parent = root; eh.material = this.headMat;
+        const eb = MeshBuilder.CreateCapsule(`enB${id}`, { height: capsuleH, radius: capsuleR, tessellation: 10 }, this.scene);
+        eb.position.y = capsuleH / 2; eb.parent = root;
+        eb.material = isBrute ? this.bruteBodyMat : this.bodyMat;
+
+        const eh = MeshBuilder.CreateSphere(`enH${id}`, { diameter: headD, segments: 6 }, this.scene);
+        eh.position.y = headY; eh.parent = root;
+        eh.material = isBrute ? this.bruteHeadMat : this.headMat;
 
         const hpBg = MeshBuilder.CreateBox(`enHpBg${id}`, { width: 1.0, height: 0.13, depth: 0.06 }, this.scene);
-        hpBg.position.y = 2.6; hpBg.parent = root;
+        hpBg.position.y = hpBarY; hpBg.parent = root;
         hpBg.material = this.hpBgMat;
         hpBg.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
         const hpBar = MeshBuilder.CreateBox(`enHpBar${id}`, { width: 1.0, height: 0.13, depth: 0.08 }, this.scene);
-        hpBar.position.y = 2.6; hpBar.parent = root;
+        hpBar.position.y = hpBarY; hpBar.parent = root;
         hpBar.material = this.hpBarMat;
         hpBar.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
-        const burnIndicator = MeshBuilder.CreateSphere(`enBurn${id}`, { diameter: 0.75, segments: 6 }, this.scene);
-        burnIndicator.position.y = 0.8;
+        const burnIndicator = MeshBuilder.CreateSphere(`enBurn${id}`, { diameter: burnD, segments: 6 }, this.scene);
+        burnIndicator.position.y = capsuleH / 2;
         burnIndicator.parent = root;
         burnIndicator.material = this.burnMat;
         burnIndicator.isVisible = false;
 
         this.enemies.push({
             root, eb, eh, hpBg, hpBar, burnIndicator,
-            hp: ENEMY_MAX_HP, maxHp: ENEMY_MAX_HP, isBoss: false,
+            hp, maxHp: hp, isBoss: false, type, speed,
             lastMelee: 0, meleeDamage: ENEMY_MELEE_DAMAGE,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
             slowEnd: 0, slowFactor: 1,
@@ -133,7 +155,7 @@ export class EnemyManager {
 
         this.enemies.push({
             root, eb, eh, hpBg, hpBar, burnIndicator,
-            hp, maxHp: hp, isBoss: true,
+            hp, maxHp: hp, isBoss: true, type: 'simple', speed: ENEMY_SPEED,
             lastMelee: 0, meleeDamage,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
             slowEnd: 0, slowFactor: 1,
@@ -184,7 +206,7 @@ export class EnemyManager {
 
             // melee range accounts for boss scale
             const effectiveRange = en.isBoss ? ENEMY_MELEE_RANGE * BOSS_SCALE : ENEMY_MELEE_RANGE;
-            const speed = now < en.slowEnd ? ENEMY_SPEED * en.slowFactor : ENEMY_SPEED;
+            const speed = now < en.slowEnd ? en.speed * en.slowFactor : en.speed;
 
             if (dist > effectiveRange) {
                 const step = toPlayer.normalize().scaleInPlace(speed);

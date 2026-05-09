@@ -1,5 +1,7 @@
 import type { Mesh, PointLight, TransformNode, Vector3 } from '@babylonjs/core';
 
+export type EnemyType = 'simple' | 'brute';
+
 export interface Enemy {
     root: TransformNode;
     eb: Mesh;
@@ -10,6 +12,8 @@ export interface Enemy {
     hp: number;
     maxHp: number;
     isBoss: boolean;
+    type: EnemyType;
+    speed: number;
     lastMelee: number;
     meleeDamage: number;
     lastHitChain?: Learnable[];

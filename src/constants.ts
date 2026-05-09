@@ -13,7 +13,7 @@ export const CAMERA_SENSITIVITY = 1 / 700;
 export const CAMERA_MIN_ZOOM = 3;
 export const CAMERA_MAX_ZOOM = 18;
 
-// Enemies
+// Enemies — simple
 export const ENEMY_MAX_HP = 50;
 export const ENEMY_SPEED = 0.028;
 export const ENEMY_MELEE_RANGE = 1.8;
@@ -21,6 +21,10 @@ export const ENEMY_MELEE_DAMAGE = 10;
 export const ENEMY_MELEE_INTERVAL = 1000;
 export const ENEMY_MAX_NORMAL = 20;
 export const ENEMY_SPAWN_INTERVAL = 3000; // ms between normal enemy spawns
+
+// Enemies — brute (slow tanky variant)
+export const BRUTE_HP_MULT   = 2.5;   // multiplied against wave base HP
+export const BRUTE_SPEED     = 0.015; // units/frame (vs 0.028 simple)
 
 // Boss
 export const BOSS_MAX_HP = 300;

@@ -7,6 +7,7 @@ export class HUD {
     private readonly manaText:   HTMLElement;
     private readonly gameOverEl: HTMLElement;
     private readonly hitFlashEl: HTMLElement;
+    private readonly waveEl:     HTMLElement;
     private hitFlashTimer = 0;
     private readonly audioCtx: AudioContext | null;
 
@@ -16,6 +17,24 @@ export class HUD {
         this.manaFill = document.getElementById('mana-fill')!;
         this.manaText = document.getElementById('mana-text')!;
         this.gameOverEl = document.getElementById('game-over')!;
+
+        this.waveEl = document.createElement('div');
+        Object.assign(this.waveEl.style, {
+            position:      'fixed',
+            top:           '54px',
+            left:          '50%',
+            transform:     'translateX(-50%)',
+            color:         '#fff',
+            fontSize:      '22px',
+            fontWeight:    '700',
+            fontFamily:    'sans-serif',
+            letterSpacing: '3px',
+            textShadow:    '0 0 14px #9955ff, 0 1px 3px #000',
+            pointerEvents: 'none',
+            zIndex:        '50',
+        });
+        this.waveEl.textContent = 'WAVE 1';
+        document.body.appendChild(this.waveEl);
 
         this.hitFlashEl = document.createElement('div');
         Object.assign(this.hitFlashEl.style, {
@@ -43,6 +62,10 @@ export class HUD {
     updateMana(mana: number): void {
         this.manaFill.style.width = `${(mana / PLAYER_MAX_MANA) * 100}%`;
         this.manaText.textContent = String(Math.floor(mana));
+    }
+
+    updateWave(wave: number): void {
+        this.waveEl.textContent = `WAVE ${wave}`;
     }
 
     showGameOver(): void {

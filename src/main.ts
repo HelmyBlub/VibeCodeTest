@@ -14,7 +14,7 @@ import { TypeLevelSystem } from './typelevel';
 import { DamageNumbers } from './damagenumbers';
 import {
     BOSS_MAX_HP, BOSS_MELEE_DAMAGE,
-    BOUNDARY, DEV_MODE, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
+    BOUNDARY, DEV_MODE, ENEMY_MAX_HP, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
 } from './constants';
 import type { Spell, SpellElement, SpellMod, SpellStage, StageElement } from './types';
 
@@ -137,12 +137,23 @@ function fireSpell(spell: Spell, slotIndex: number): void {
 
 // ── Game loop state ───────────────────────────────────────────────────────────
 
-let spellbook:        SpellbookPickup | null = null;
-let choiceOpen        = false;
-let lastSpawnTime     = 0;
-let bossSpawnPending  = true;   // spawn first boss shortly after game start
-let bossSpawnAt       = Date.now() + 5000; // 5s initial delay
-let bossesDefeated    = 0;
+let spellbooks:         SpellbookPickup[] = [];
+let choiceOpen          = false;
+let lastSpawnTime       = 0;
+let bossSpawnPending    = true;   // spawn first boss shortly after game start
+let bossSpawnAt         = Date.now() + 5000; // 5s initial delay
+let waveNumber          = 1;
+let spellbookDroppedAt  = 0;     // timestamp when spellbook was placed; 0 = none pending
+
+const SPELLBOOK_TIMEOUT_MS = 15000; // force next boss if spellbook not picked up within this
+
+function waveNormalHp(): number {
+    return Math.round(ENEMY_MAX_HP * (1 + (waveNumber - 1) * 0.3));
+}
+
+function waveEnemyType(): 'simple' | 'brute' {
+    return waveNumber % 2 === 1 ? 'simple' : 'brute';
+}
 
 function randomEdgePos(): { x: number; z: number } {
     const edge = BOUNDARY - 3;
@@ -159,24 +170,30 @@ function randomEdgePos(): { x: number; z: number } {
 function spawnBossNow(): void {
     bossSpawnPending = false;
     const { x, z } = randomEdgePos();
-    const bossHp  = Math.round(BOSS_MAX_HP * (1 + bossesDefeated * 0.5));
-    const bossDmg = Math.round(BOSS_MELEE_DAMAGE * (1 + bossesDefeated * 0.25));
+    const bossHp  = Math.round(BOSS_MAX_HP  * (1 + (waveNumber - 1) * 0.5));
+    const bossDmg = Math.round(BOSS_MELEE_DAMAGE * (1 + (waveNumber - 1) * 0.25));
     enemyManager.spawnBoss(x, z, bossHp, bossDmg, () => {
-        bossesDefeated++;
+        waveNumber++;
+        hud.updateWave(waveNumber);
         // Boss died — drop spellbook at its last known position
         const boss = enemyManager.enemies.find(e => e.isBoss);
         const dropPos = boss?.root.position ?? new Vector3(x, 0, z);
-        spellbook = new SpellbookPickup(scene, dropPos);
+        spellbooks.push(new SpellbookPickup(scene, dropPos));
+        spellbookDroppedAt = Date.now();
     });
 }
 
 function handlePickup(): void {
-    if (!spellbook || choiceOpen) return;
-    const inRange = spellbook.update(player.position);
-    if (!inRange) return;
+    if (choiceOpen || spellbooks.length === 0) return;
+    // Animate all books; pick up the first one in range
+    let pickedIdx = -1;
+    for (let i = 0; i < spellbooks.length; i++) {
+        const inRange = spellbooks[i].update(player.position);
+        if (inRange && pickedIdx === -1) pickedIdx = i;
+    }
+    if (pickedIdx === -1) return;
 
-    spellbook.dispose();
-    spellbook = null;
+    spellbooks.splice(pickedIdx, 1)[0].dispose();
     choiceOpen = true;
 
     // Build 3 random choices from not-yet-unlocked types AND spell mods
@@ -193,6 +210,7 @@ function handlePickup(): void {
     if (choices.length === 0) {
         // Everything already unlocked — just spawn next boss
         choiceOpen = false;
+        spellbookDroppedAt = 0;
         bossSpawnPending = true;
         bossSpawnAt = Date.now() + 2000;
         return;
@@ -209,6 +227,7 @@ function handlePickup(): void {
             syncLevels();
         }
         choiceOpen = false;
+        spellbookDroppedAt = 0;
         bossSpawnPending = true;
         bossSpawnAt = Date.now() + 2000;
     });
@@ -234,6 +253,7 @@ window.addEventListener('keydown', e => {
             for (let i = 0; i < 4; i++) {
                 if (slotLastCast[i] > 0) slotLastCast[i] += paused;
             }
+            if (spellbookDroppedAt > 0) spellbookDroppedAt += paused;
             combat.resyncClock();
         }
         spellCreator.toggle();
@@ -326,7 +346,15 @@ scene.onBeforeRenderObservable.add(() => {
     if (now - lastSpawnTime > ENEMY_SPAWN_INTERVAL && enemyManager.normalCount < ENEMY_MAX_NORMAL) {
         lastSpawnTime = now;
         const { x, z } = randomEdgePos();
-        enemyManager.spawn(x, z);
+        enemyManager.spawn(x, z, waveNormalHp(), waveEnemyType());
+    }
+
+    // Force next boss if spellbook sits uncollected too long; pauses while choice is open
+    if (!bossSpawnPending && !enemyManager.bossAlive && spellbookDroppedAt > 0 && !choiceOpen
+            && now - spellbookDroppedAt >= SPELLBOOK_TIMEOUT_MS) {
+        spellbookDroppedAt = 0;
+        bossSpawnPending = true;
+        bossSpawnAt = now;
     }
 
     // Boss spawning
@@ -335,7 +363,7 @@ scene.onBeforeRenderObservable.add(() => {
     }
 
     // Spellbook pickup
-    if (spellbook) handlePickup();
+    handlePickup();
 
     camera.target.copyFrom(player.position);
     camera.target.y += 1;
