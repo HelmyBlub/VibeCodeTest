@@ -1,6 +1,6 @@
 import type { Spell, SpellElement, SpellMod, SpellStage, StageElement, StageTrigger } from './types';
 import { SpellVisualization, type StageVizItem } from './spellviz';
-import { MANA_COST_FACTOR } from './constants';
+import { MANA_COST_FACTOR, PLAYER_MAX_MANA } from './constants';
 
 // ── Formulas ──────────────────────────────────────────────────────────────────
 
@@ -79,6 +79,7 @@ function fmtMana(n: number): string {
     if (n >= 1000)  return `${(n / 1000).toFixed(1)}k`;
     return String(Math.round(n));
 }
+
 
 function defaultStageDraft(): StageDraft {
     return { element: 'carrier', power: 50, pitch: 0, yaw: 0, count: 1, spread: 0, yawSpread: 0,
@@ -382,30 +383,43 @@ export class SpellCreator {
                  manaCost: Math.max(1, this.chainMana(this.stageRoots)), projectiles: [], stages };
     }
 
-    private chainMana(nodes: StageDraft[], mult = 1): number {
+    private chainManaSplit(nodes: StageDraft[], mult = 1): { elem: number; struct: number } {
         const castTime = this.effectiveCastTime;
-        return nodes.reduce((sum, n) => {
+        let elem = 0, struct = 0;
+        for (const n of nodes) {
             if (n.element === 'cloud') {
-                // faster interval = higher DPS = higher cost; slowest→×0.2, fastest→×1.5
+                struct += 1;
                 const t = (n.intervalMs - 100) / 9900;
                 const intervalFactor = 1.5 - t * 1.3;
-                return sum + this.chainMana(n.children, mult * n.count * intervalFactor);
+                const child = this.chainManaSplit(n.children, mult * n.count * intervalFactor);
+                elem += child.elem; struct += child.struct;
             } else if (n.element === 'carrier') {
-                // impact: need to land the projectile — small flat discount
-                // delay: linear discount, up to 90% at max 10 s delay
-                const carrierMult = n.trigger === 'impact'
-                    ? 0.85
-                    : 1 - 0.9 * (n.triggerMs / 10000);
-                return sum + this.chainMana(n.children, mult * carrierMult);
+                struct += 1;
+                const carrierMult = n.trigger === 'impact' ? 0.85 : 1 - 0.9 * (n.triggerMs / 10000);
+                const child = this.chainManaSplit(n.children, mult * carrierMult);
+                elem += child.elem; struct += child.struct;
             } else {
                 const mods = {
                     burnDuration: n.element === 'fire'      ? n.burnDuration : undefined,
                     jumpCount:    n.element === 'lightning' ? n.jumpCount    : undefined,
                     slowPercent:  n.element === 'ice'       ? n.slowPercent  : undefined,
                 };
-                return sum + calcManaCost(n.power, castTime, mods) * mult + this.chainMana(n.children, mult);
+                elem += calcManaCost(n.power, castTime, mods) * mult;
+                const child = this.chainManaSplit(n.children, mult);
+                elem += child.elem; struct += child.struct;
             }
-        }, 0);
+        }
+        return { elem, struct };
+    }
+
+    private chainMana(nodes: StageDraft[]): number {
+        const { elem, struct } = this.chainManaSplit(nodes);
+        return Math.max(struct, elem);
+    }
+
+    private get overBudget(): boolean {
+        const eff = Math.ceil(Math.max(1, this.chainMana(this.stageRoots)) * this.displayManaMult);
+        return eff > PLAYER_MAX_MANA;
     }
 
     private commitToActiveSlot(): void {
@@ -462,7 +476,7 @@ export class SpellCreator {
         let html = '';
         for (let i = 0; i < this.stageRoots.length; i++)
             html += this.renderTreeRow(this.stageRoots[i], [i], 0);
-        html += `<button class="sc-btn sc-stage-add-root" style="margin-top:6px;width:100%;font-size:12px">+ Add stage</button>`;
+        html += `<button class="sc-btn sc-stage-add-root" style="margin-top:6px;width:100%;font-size:12px"${this.overBudget ? ' disabled' : ''}>+ Add stage</button>`;
         this.stageTreeEl.innerHTML = html;
     }
 
@@ -552,7 +566,7 @@ export class SpellCreator {
     <option value="impact"${s.trigger==='impact'?' selected':''}>Impact</option>
   </select>
   ${s.trigger !== 'impact' ? `<input type="number" class="sc-number sc-num-narrow" data-path="${ps}" data-stage-field="triggerMs" min="100" max="10000" value="${s.triggerMs}"><span class="sc-unit">ms</span>` : ''}
-  <button class="sc-btn sc-stage-add-child" data-path="${ps}" style="margin-left:auto">+ Child</button>
+  <button class="sc-btn sc-stage-add-child" data-path="${ps}" style="margin-left:auto"${this.overBudget ? ' disabled' : ''}>+ Child</button>
 </div>` : el === 'cloud' ? `
 <div class="sc-stage-inline">
   <span class="sc-stage-lbl">Ticks</span>
@@ -565,7 +579,7 @@ export class SpellCreator {
 </div>
 <div class="sc-stage-connector">
   <span class="sc-conn-arrow">▼ each tick</span>
-  <button class="sc-btn sc-stage-add-child" data-path="${ps}" style="margin-left:auto">+ Child</button>
+  <button class="sc-btn sc-stage-add-child" data-path="${ps}" style="margin-left:auto"${this.overBudget ? ' disabled' : ''}>+ Child</button>
 </div>` : '';
 
         // element-specific rows
@@ -603,7 +617,7 @@ export class SpellCreator {
   ${this.selectedStagePath.length > 1 ? `<div class="sc-stage-crumb">${this.buildCrumb(this.selectedStagePath.slice(0,-1))} <span class="sc-crumb-sep">›</span></div>` : ''}
   ${elemDropdown}
   <div class="sc-copy-wrap" style="margin-left:auto">
-    <button class="sc-btn sc-stage-copy-main" data-has-children="${s.children.length > 0 ? '1' : ''}" style="font-size:11px;padding:3px 8px">⊕ Copy</button>
+    <button class="sc-btn sc-stage-copy-main" data-has-children="${s.children.length > 0 ? '1' : ''}" style="font-size:11px;padding:3px 8px"${this.overBudget ? ' disabled' : ''}>⊕ Copy</button>
     <div class="sc-copy-dropdown">
       <button class="sc-btn sc-stage-copy-single">Stage</button>
       <button class="sc-btn sc-stage-copy-tree">Branch</button>
@@ -778,13 +792,18 @@ export class SpellCreator {
             }
         };
         walk(this.stageRoots, 0);
-        const baseMana = Math.max(1, this.chainMana(this.stageRoots));
-        const effMana  = Math.ceil(baseMana * this.displayManaMult);
-        const manaHtml = this.displayManaMult < 0.999
-            ? `<strong style="color:#88ddff">${fmtMana(effMana)}</strong> <span style="color:#666;font-size:11px">(base ${fmtMana(baseMana)})</span>`
-            : `<strong>${fmtMana(baseMana)}</strong>`;
+        const baseMana  = Math.max(1, this.chainMana(this.stageRoots));
+        const effMana   = Math.ceil(baseMana * this.displayManaMult);
+        const overLimit = effMana > PLAYER_MAX_MANA;
+        const manaHtml  = this.displayManaMult < 0.999
+            ? `<strong style="color:${overLimit ? '#ff5555' : '#88ddff'}">${fmtMana(effMana)}</strong> <span style="color:#666;font-size:11px">(base ${fmtMana(baseMana)})</span>`
+            : `<strong style="color:${overLimit ? '#ff5555' : 'inherit'}">${fmtMana(baseMana)}</strong>`;
+        const budgetWarning = overLimit
+            ? `<div class="sc-budget-warning">⚠ Exceeds max mana (${PLAYER_MAX_MANA}) — reduce complexity or gain levels</div>`
+            : '';
         this.previewEl.innerHTML = `
-<div class="sc-cost">Mana: ${manaHtml}</div>
+<div class="sc-cost">Mana: ${manaHtml} <span style="color:#555;font-size:11px">/ ${PLAYER_MAX_MANA}</span></div>
+${budgetWarning}
 <div class="sc-proj-preview-list">${lines.join('')}</div>
 <div class="sc-desc">${ctLabel} · ${cdLabel}</div>`;
         this.commitToActiveSlot();
@@ -1064,6 +1083,8 @@ export class SpellCreator {
                     if (parentArr.length > 0)  this.selectedStagePath = [...path.slice(0,-1), Math.min(deletedIdx, parentArr.length-1)];
                     else if (path.length > 1)  this.selectedStagePath = path.slice(0, -1);
                     else                        this.selectedStagePath = null;
+                } else if (sel) {
+                    this.selectedStagePath = this.adjustPathAfterRemoval(path, sel);
                 }
                 this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); return;
             }
