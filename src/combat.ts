@@ -14,7 +14,7 @@ import {
     STAGE_CARRIER_SPEED,
 } from './constants';
 import type {
-    Enemy, Fireball, ProjectileConfig, Spell, SpellElement,
+    Enemy, Fireball, Learnable, ProjectileConfig, Spell, SpellElement,
     SpellStage, StageElement,
 } from './types';
 
@@ -56,7 +56,7 @@ interface LiveStage {
     maxRange:   number;   // lightning: dispose distance
     initDir:    Vector3;  // world-space direction at spawn, used as forward reference for children
     healGiven:  number;   // heal: cumulative HP dispensed (includes passive decay)
-    ancestors:  StageElement[]; // parent element chain (excludes this stage's own element)
+    ancestors:  Learnable[]; // parent element chain (excludes this stage's own element)
 }
 
 // ── CombatSystem ──────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ export class CombatSystem {
     }
 
     /** Called once per heal tick when something was healed. amount = total HP actually restored. */
-    onHealXp?: (chain: StageElement[], amount: number) => void;
+    onHealXp?: (chain: Learnable[], amount: number) => void;
     /** Called on every direct damage hit. */
     onDamageDealt?: (worldPos: Vector3, amount: number, element: StageElement) => void;
 
@@ -244,6 +244,10 @@ export class CombatSystem {
         const right  = Vector3.Cross(Vector3.Up(), playerForward).normalize();
         const origin = playerPos.add(new Vector3(0, 1.2, 0));
 
+        const spellModAncestors: Learnable[] = [];
+        if (spell.castTime > 0) spellModAncestors.push('castTime');
+        if (spell.cooldown  > 0) spellModAncestors.push('cooldown');
+
         for (const s0 of spell.stages) {
             // cloud.count = tick count, not simultaneous instances — only ever spawn one
             const spawnCount = s0.element === 'cloud' ? 1 : s0.count;
@@ -254,12 +258,12 @@ export class CombatSystem {
                 spawnPos.addInPlace(right.scale(s0.offsetX ?? 0));
                 spawnPos.addInPlace(Vector3.Up().scale(s0.offsetY ?? 0));
                 spawnPos.addInPlace(playerForward.scale(s0.offsetZ ?? 0));
-                this.spawnLiveStage(spawnPos, dir, s0);
+                this.spawnLiveStage(spawnPos, dir, s0, spellModAncestors);
             }
         }
     }
 
-    private spawnLiveStage(pos: Vector3, dir: Vector3, cfg: SpellStage, ancestors: StageElement[] = []): void {
+    private spawnLiveStage(pos: Vector3, dir: Vector3, cfg: SpellStage, ancestors: Learnable[] = []): void {
         if (this.liveStages.length >= 100) return; // hard cap against exponential chains
         const [diffuse, emit] = STAGE_COLOR[cfg.element];
 
@@ -322,7 +326,7 @@ export class CombatSystem {
                        cross2.length() > 0.001 ? cross2.normalize() : new Vector3(-1, 0, 0);
 
         // Children's ancestor chain = this stage's ancestors + this stage's element
-        const childAncestors: StageElement[] = [...ls.ancestors, ls.config.element];
+        const childAncestors: Learnable[] = [...ls.ancestors, ls.config.element];
 
         for (const child of children) {
             // cloud.count means tick count, not simultaneous spawns — always spawn one cloud
@@ -386,7 +390,7 @@ export class CombatSystem {
 
     private applyStageHitEffect(
         ls: LiveStage, en: Enemy, enemies: Enemy[], onKill: (e: Enemy) => void, now: number,
-        hitChain: StageElement[],
+        hitChain: Learnable[],
     ): void {
         switch (ls.config.element) {
             case 'fire':
@@ -524,7 +528,7 @@ export class CombatSystem {
                     if (this.enemyHitDist(ls.mesh.position, en) >= FIREBALL_HIT_RADIUS) continue;
 
                     ls.hitEnemies.add(en);
-                    const hitChain: StageElement[] = [...ls.ancestors, cfg.element];
+                    const hitChain: Learnable[] = [...ls.ancestors, cfg.element];
                     en.lastHitChain = hitChain;
                     const stageDmg = Math.round(cfg.damage * this.damageMultiplier);
                     en.hp -= stageDmg;

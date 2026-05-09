@@ -1,4 +1,4 @@
-import type { Spell, SpellElement, SpellStage, StageElement, StageTrigger } from './types';
+import type { Spell, SpellElement, SpellMod, SpellStage, StageElement, StageTrigger } from './types';
 import { SpellVisualization, type StageVizItem } from './spellviz';
 import { MANA_COST_FACTOR } from './constants';
 
@@ -156,11 +156,13 @@ function slotIcons(s: Spell): string {
 // ── SpellCreator ──────────────────────────────────────────────────────────────
 
 export class SpellCreator {
-    private castTime = 0;
+    private castTime = 1000;
     private cooldown = 2000;
     private activeSlot = 0;
     private defaultElement: StageElement = 'fire';
-    private unlockedTypes = new Set<StageElement>(['fire', 'ice', 'lightning', 'carrier', 'cloud'] as const);
+    private unlockedTypes    = new Set<StageElement>(['fire', 'ice', 'lightning', 'carrier', 'cloud'] as const);
+    private unlockedSpellMods = new Set<SpellMod>();
+    private addedMods         = new Set<SpellMod>();
     private displayDmgMult  = 1.0;
     private displayManaMult = 1.0;
 
@@ -175,17 +177,15 @@ export class SpellCreator {
     private viz!: SpellVisualization;
 
     // DOM refs
-    private previewEl!:     HTMLElement;
-    private slotTabsEl!:    HTMLElement;
-    private copyRowEl!:     HTMLElement;
-    private castSlider!:    HTMLInputElement;
-    private castInput!:     HTMLInputElement;
-    private cdSlider!:      HTMLInputElement;
-    private cdInput!:       HTMLInputElement;
-    private stageTreeEl!:   HTMLElement;
-    private stageEditorEl!: HTMLElement;
-    private vizHintEl!:     HTMLElement;
-    private addPickerEl!:   HTMLElement;
+    private previewEl!:          HTMLElement;
+    private slotTabsEl!:         HTMLElement;
+    private copyRowEl!:          HTMLElement;
+    private spellPropsSectionEl!: HTMLElement;
+    private spellPropsEl!:        HTMLElement;
+    private stageTreeEl!:        HTMLElement;
+    private stageEditorEl!:      HTMLElement;
+    private vizHintEl!:          HTMLElement;
+    private addPickerEl!:        HTMLElement;
 
     constructor() {
         this.overlay = document.getElementById('spell-creator')!;
@@ -312,15 +312,78 @@ export class SpellCreator {
         this.chainUpdatePreview();
     }
 
+    // ── Spell properties (cast time / cooldown) ───────────────────────────────
+
+    private get effectiveCastTime(): number { return this.addedMods.has('castTime') ? this.castTime : 0; }
+    private get effectiveCooldown():  number { return this.addedMods.has('cooldown')  ? this.cooldown  : 0; }
+
+    private renderSpellProps(): void {
+        const anyUnlocked = this.unlockedSpellMods.size > 0;
+        this.spellPropsSectionEl.style.display = anyUnlocked ? '' : 'none';
+        if (!anyUnlocked) return;
+
+        let html = '';
+
+        if (this.addedMods.has('castTime')) {
+            html += `
+<div class="sc-spell-prop-row">
+  <div class="sc-slider-row">
+    <span class="sc-stage-lbl">✦ Cast Time</span>
+    <input type="range" class="sc-slider" data-spell-prop-field="castTime" min="0" max="3000" step="50" value="${this.castTime}">
+    <input type="number" class="sc-number sc-num-narrow" data-spell-prop-field="castTimeN" min="0" max="3" step="0.1" value="${fmt1(this.castTime/1000)}">
+    <span class="sc-unit">s</span>
+    <button class="sc-btn sc-spell-prop-remove" data-remove-mod="castTime">×</button>
+  </div>
+</div>`;
+        }
+
+        if (this.addedMods.has('cooldown')) {
+            html += `
+<div class="sc-spell-prop-row">
+  <div class="sc-slider-row">
+    <span class="sc-stage-lbl">⟳ Cooldown</span>
+    <input type="range" class="sc-slider" data-spell-prop-field="cooldown" min="0" max="10000" step="100" value="${this.cooldown}">
+    <input type="number" class="sc-number sc-num-narrow" data-spell-prop-field="cooldownN" min="0" max="10" step="0.1" value="${fmt1(this.cooldown/1000)}">
+    <span class="sc-unit">s</span>
+    <button class="sc-btn sc-spell-prop-remove" data-remove-mod="cooldown">×</button>
+  </div>
+</div>`;
+        }
+
+        const available = ([...this.unlockedSpellMods] as SpellMod[]).filter(m => !this.addedMods.has(m));
+        if (available.length > 0) {
+            const MOD_ICON:  Record<SpellMod, string> = { castTime: '✦', cooldown: '⟳' };
+            const MOD_LABEL: Record<SpellMod, string> = { castTime: 'Cast Time', cooldown: 'Cooldown' };
+            const MOD_DESC:  Record<SpellMod, string> = {
+                castTime: 'Add a channel time — reduces mana cost in exchange for interruption risk.',
+                cooldown: 'Add a cooldown — increases damage in exchange for waiting time.',
+            };
+            const opts = available.map(m =>
+                `<button class="sc-btn sc-spell-prop-add-btn" data-add-mod="${m}" data-mod-desc="${MOD_DESC[m]}">${MOD_ICON[m]} ${MOD_LABEL[m]}</button>`
+            ).join('');
+            html += `
+<div class="sc-spell-prop-add-wrap">
+  <button class="sc-btn sc-spell-prop-add-main" style="font-size:12px;padding:3px 8px;margin-top:4px">+ Add property</button>
+  <div class="sc-spell-prop-add-dropdown"><div class="sc-elem-options">${opts}</div><div class="sc-elem-hint"></div></div>
+</div>`;
+        }
+
+        this.spellPropsEl.innerHTML = html;
+        this.disableSliderTabbing();
+    }
+
     // ── Spell building ────────────────────────────────────────────────────────
 
     private makeSpell(): Spell {
-        const stages = this.stageRoots.map(r => draftToStage(r, this.cooldown, this.castTime));
-        return { castTime: this.castTime, cooldown: this.cooldown,
+        const castTime = this.effectiveCastTime;
+        const cooldown = this.effectiveCooldown;
+        const stages = this.stageRoots.map(r => draftToStage(r, cooldown, castTime));
+        return { castTime, cooldown,
                  manaCost: Math.max(1, this.chainMana(this.stageRoots)), projectiles: [], stages };
     }
 
     private chainMana(nodes: StageDraft[], mult = 1): number {
+        const castTime = this.effectiveCastTime;
         return nodes.reduce((sum, n) => {
             if (n.element === 'cloud') {
                 // faster interval = higher DPS = higher cost; slowest→×0.2, fastest→×1.5
@@ -340,7 +403,7 @@ export class SpellCreator {
                     jumpCount:    n.element === 'lightning' ? n.jumpCount    : undefined,
                     slowPercent:  n.element === 'ice'       ? n.slowPercent  : undefined,
                 };
-                return sum + calcManaCost(n.power, this.castTime, mods) * mult + this.chainMana(n.children, mult);
+                return sum + calcManaCost(n.power, castTime, mods) * mult + this.chainMana(n.children, mult);
             }
         }, 0);
     }
@@ -355,19 +418,20 @@ export class SpellCreator {
     private selectSlot(i: number): void {
         this.activeSlot = i;
         const spell = this.slots[i];
+        this.addedMods.clear();
         if (spell?.stages?.length) {
-            this.castTime   = spell.castTime;
-            this.cooldown   = spell.cooldown;
+            this.castTime   = spell.castTime  || 1000;
+            this.cooldown   = spell.cooldown  || 2000;
+            if (spell.castTime  > 0 && this.unlockedSpellMods.has('castTime'))  this.addedMods.add('castTime');
+            if (spell.cooldown  > 0 && this.unlockedSpellMods.has('cooldown'))  this.addedMods.add('cooldown');
             this.stageRoots = spell.stages.map(stageToDraft);
         } else {
-            this.castTime   = 0;
+            this.castTime   = 1000;
             this.cooldown   = 2000;
             this.stageRoots = defaultStageRoots(this.defaultElement);
         }
         this.selectedStagePath = this.stageRoots.length ? [0] : null;
-        this.castSlider.value  = String(this.castTime);  this.castInput.value = fmt1(this.castTime / 1000);
-        this.cdSlider.value    = String(this.cooldown);   this.cdInput.value   = fmt1(this.cooldown / 1000);
-        this.renderSlotTabs(); this.renderCopyRow();
+        this.renderSlotTabs(); this.renderCopyRow(); this.renderSpellProps();
         this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview();
     }
 
@@ -679,8 +743,10 @@ export class SpellCreator {
     // ── Preview ───────────────────────────────────────────────────────────────
 
     private chainUpdatePreview(): void {
-        const ctLabel = this.castTime === 0 ? 'Fires instantly' : `${fmt1(this.castTime/1000)} s channel`;
-        const cdLabel = this.cooldown === 0 ? 'No cooldown'     : `${fmt1(this.cooldown/1000)} s cooldown`;
+        const castTime = this.effectiveCastTime;
+        const cooldown = this.effectiveCooldown;
+        const ctLabel = castTime === 0 ? 'Fires instantly' : `${fmt1(castTime/1000)} s channel`;
+        const cdLabel = cooldown === 0 ? 'No cooldown'     : `${fmt1(cooldown/1000)} s cooldown`;
         const lines: string[] = [];
         const walk = (nodes: StageDraft[], depth: number) => {
             for (const s of nodes) {
@@ -689,13 +755,13 @@ export class SpellCreator {
                 const isStaging = s.element === 'carrier' || s.element === 'cloud';
                 let dmg = '';
                 if (!isStaging && s.element !== 'heal') {
-                    const base = calcDamage(s.power, this.cooldown);
+                    const base = calcDamage(s.power, cooldown);
                     const eff  = Math.round(base * this.displayDmgMult);
                     dmg = this.displayDmgMult > 1.0
                         ? ` · <span style="color:#ffdd88">${eff} dmg</span>`
                         : ` · ${base} dmg`;
                     if (s.element === 'fire') {
-                        const burnBase  = calcBurnDamage(s.power, this.cooldown);
+                        const burnBase  = calcBurnDamage(s.power, cooldown);
                         const burnEff   = Math.round(burnBase * this.displayDmgMult);
                         const ticks     = Math.round(s.burnDuration / 500);
                         const burnShow  = this.displayDmgMult > 1.0 ? burnEff : burnBase;
@@ -743,20 +809,9 @@ export class SpellCreator {
       <div class="sc-slot-copy-wrap" id="sc-copy-row"></div>
     </div>
 
-    <div class="sc-section">
-      <div class="sc-label">CAST TIME <span class="sc-range-hint">0 – 3 s</span></div>
-      <div class="sc-slider-row">
-        <input type="range" class="sc-slider" id="sc-cast-slider" min="0" max="3000" step="50" value="${this.castTime}">
-        <input type="number" class="sc-number" id="sc-cast-input" min="0" max="3" step="any" value="${fmt1(this.castTime/1000)}">
-      </div>
-    </div>
-
-    <div class="sc-section">
-      <div class="sc-label">COOLDOWN <span class="sc-range-hint">0 – 10 s</span></div>
-      <div class="sc-slider-row">
-        <input type="range" class="sc-slider" id="sc-cd-slider" min="0" max="10000" step="100" value="${this.cooldown}">
-        <input type="number" class="sc-number" id="sc-cd-input" min="0" max="10" step="any" value="${fmt1(this.cooldown/1000)}">
-      </div>
+    <div class="sc-section" id="sc-spell-props-section" style="display:none">
+      <div class="sc-label">SPELL PROPERTIES</div>
+      <div id="sc-spell-props"></div>
     </div>
 
     <div class="sc-section">
@@ -795,16 +850,14 @@ export class SpellCreator {
         }
         this.addPickerEl = document.getElementById('sc-add-picker')!;
 
-        this.previewEl    = this.overlay.querySelector<HTMLElement>('#sc-preview')!;
-        this.slotTabsEl   = this.overlay.querySelector<HTMLElement>('#sc-slot-tabs')!;
-        this.copyRowEl    = this.overlay.querySelector<HTMLElement>('#sc-copy-row')!;
+        this.previewEl          = this.overlay.querySelector<HTMLElement>('#sc-preview')!;
+        this.slotTabsEl         = this.overlay.querySelector<HTMLElement>('#sc-slot-tabs')!;
+        this.copyRowEl          = this.overlay.querySelector<HTMLElement>('#sc-copy-row')!;
+        this.spellPropsSectionEl = this.overlay.querySelector<HTMLElement>('#sc-spell-props-section')!;
+        this.spellPropsEl       = this.overlay.querySelector<HTMLElement>('#sc-spell-props')!;
         this.renderCopyRow();
         this.stageTreeEl  = this.overlay.querySelector<HTMLElement>('#sc-stage-tree')!;
         this.stageEditorEl = this.overlay.querySelector<HTMLElement>('#sc-stage-editor')!;
-
-        const get = (id: string) => this.overlay.querySelector<HTMLInputElement>(`#${id}`)!;
-        this.castSlider  = get('sc-cast-slider'); this.castInput = get('sc-cast-input');
-        this.cdSlider    = get('sc-cd-slider');   this.cdInput   = get('sc-cd-input');
         this.vizHintEl   = this.overlay.querySelector<HTMLElement>('.sc-viz-hint')!;
 
         const vizCanvas  = this.overlay.querySelector<HTMLCanvasElement>('#sc-viz-canvas')!;
@@ -894,15 +947,23 @@ export class SpellCreator {
     private bindEvents(): void {
         this.overlay.addEventListener('mouseover', e => {
             const t = e.target as HTMLElement;
-            if (!t.classList.contains('sc-stage-elem-btn')) return;
-            const hint = t.closest('.sc-elem-dropdown')?.querySelector<HTMLElement>('.sc-elem-hint');
-            if (hint) hint.textContent = t.dataset['elemDesc'] ?? '';
+            if (t.classList.contains('sc-stage-elem-btn')) {
+                const hint = t.closest('.sc-elem-dropdown')?.querySelector<HTMLElement>('.sc-elem-hint');
+                if (hint) hint.textContent = t.dataset['elemDesc'] ?? '';
+            } else if (t.classList.contains('sc-spell-prop-add-btn')) {
+                const hint = t.closest('.sc-spell-prop-add-dropdown')?.querySelector<HTMLElement>('.sc-elem-hint');
+                if (hint) hint.textContent = t.dataset['modDesc'] ?? '';
+            }
         });
         this.overlay.addEventListener('mouseout', e => {
             const t = e.target as HTMLElement;
-            if (!t.classList.contains('sc-stage-elem-btn')) return;
-            const hint = t.closest('.sc-elem-dropdown')?.querySelector<HTMLElement>('.sc-elem-hint');
-            if (hint) hint.textContent = '';
+            if (t.classList.contains('sc-stage-elem-btn')) {
+                const hint = t.closest('.sc-elem-dropdown')?.querySelector<HTMLElement>('.sc-elem-hint');
+                if (hint) hint.textContent = '';
+            } else if (t.classList.contains('sc-spell-prop-add-btn')) {
+                const hint = t.closest('.sc-spell-prop-add-dropdown')?.querySelector<HTMLElement>('.sc-elem-hint');
+                if (hint) hint.textContent = '';
+            }
         });
 
         // Add-picker hover descriptions
@@ -964,6 +1025,31 @@ export class SpellCreator {
             if (expandedCopy && !t.closest('.sc-copy-wrap')) expandedCopy.classList.remove('expanded');
             const expandedElem = this.stageEditorEl?.querySelector<HTMLElement>('.sc-elem-wrap.expanded');
             if (expandedElem && !t.closest('.sc-elem-wrap')) expandedElem.classList.remove('expanded');
+            const expandedProps = this.spellPropsEl?.querySelector<HTMLElement>('.sc-spell-prop-add-wrap.expanded');
+            if (expandedProps && !t.closest('.sc-spell-prop-add-wrap')) expandedProps.classList.remove('expanded');
+
+            // Spell property add/remove
+            if (t.dataset['removeMod']) {
+                const mod = t.dataset['removeMod'] as SpellMod;
+                this.addedMods.delete(mod);
+                if (mod === 'castTime') this.castTime = 1000;
+                if (mod === 'cooldown') this.cooldown = 2000;
+                this.renderSpellProps();
+                this.chainUpdatePreview();
+                return;
+            }
+            if (t.classList.contains('sc-spell-prop-add-main')) {
+                t.closest<HTMLElement>('.sc-spell-prop-add-wrap')!.classList.toggle('expanded');
+                return;
+            }
+            if (t.dataset['addMod']) {
+                const mod = t.dataset['addMod'] as SpellMod;
+                this.addedMods.add(mod);
+                t.closest<HTMLElement>('.sc-spell-prop-add-wrap')?.classList.remove('expanded');
+                this.renderSpellProps();
+                this.chainUpdatePreview();
+                return;
+            }
 
             // Structural buttons
             if (t.classList.contains('sc-stage-del')) {
@@ -1020,31 +1106,43 @@ export class SpellCreator {
             if (t.classList.contains('sc-stage-copy-tree'))   { this.copyStage(true);  return; }
         });
 
-        // Cast time
-        this.castSlider.addEventListener('input', () => {
-            this.castTime = Number(this.castSlider.value);
-            this.castInput.value = fmt1(this.castTime / 1000); this.chainUpdatePreview();
-        });
-        this.castInput.addEventListener('input', () => {
-            this.castTime = Math.round(Math.min(3, Math.max(0, Number(this.castInput.value)||0)) * 1000);
-            this.castSlider.value = String(this.castTime); this.chainUpdatePreview();
-        });
-        this.castInput.addEventListener('blur', () => { this.castInput.value = fmt1(this.castTime / 1000); });
+        // Spell property field delegation (cast time / cooldown sliders)
+        this.overlay.addEventListener('blur', e => {
+            const t = e.target as HTMLInputElement;
+            const f = t.dataset['spellPropField'];
+            if (f === 'castTimeN') t.value = fmt1(this.castTime / 1000);
+            if (f === 'cooldownN') t.value = fmt1(this.cooldown / 1000);
+        }, true);
 
-        // Cooldown
-        this.cdSlider.addEventListener('input', () => {
-            this.cooldown = Number(this.cdSlider.value);
-            this.cdInput.value = fmt1(this.cooldown / 1000); this.chainUpdatePreview();
-        });
-        this.cdInput.addEventListener('input', () => {
-            this.cooldown = Math.round(Math.min(10, Math.max(0, Number(this.cdInput.value)||0)) * 1000);
-            this.cdSlider.value = String(this.cooldown); this.chainUpdatePreview();
-        });
-        this.cdInput.addEventListener('blur', () => { this.cdInput.value = fmt1(this.cooldown / 1000); });
-
-        // Stage editor input delegation
+        // Stage editor input delegation (and spell-prop fields)
         this.overlay.addEventListener('input', e => {
             const t = e.target as HTMLInputElement | HTMLSelectElement;
+
+            // Spell-wide properties (cast time / cooldown)
+            const spellField = (t as HTMLInputElement).dataset['spellPropField'];
+            if (spellField) {
+                const v = (t as HTMLInputElement).value;
+                if (spellField === 'castTime') {
+                    this.castTime = Math.max(0, Math.min(3000, Math.round(Number(v))));
+                    const num = this.spellPropsEl.querySelector<HTMLInputElement>('[data-spell-prop-field="castTimeN"]');
+                    if (num) num.value = fmt1(this.castTime / 1000);
+                } else if (spellField === 'castTimeN') {
+                    this.castTime = Math.round(Math.min(3, Math.max(0, Number(v)||0)) * 1000);
+                    const sl = this.spellPropsEl.querySelector<HTMLInputElement>('[data-spell-prop-field="castTime"]');
+                    if (sl) sl.value = String(this.castTime);
+                } else if (spellField === 'cooldown') {
+                    this.cooldown = Math.max(0, Math.min(10000, Math.round(Number(v) / 100) * 100));
+                    const num = this.spellPropsEl.querySelector<HTMLInputElement>('[data-spell-prop-field="cooldownN"]');
+                    if (num) num.value = fmt1(this.cooldown / 1000);
+                } else if (spellField === 'cooldownN') {
+                    this.cooldown = Math.round(Math.min(10, Math.max(0, Number(v)||0)) * 1000);
+                    const sl = this.spellPropsEl.querySelector<HTMLInputElement>('[data-spell-prop-field="cooldown"]');
+                    if (sl) sl.value = String(this.cooldown);
+                }
+                this.chainUpdatePreview();
+                return;
+            }
+
             const ps = t.dataset['path'], field = t.dataset['stageField'];
             if (!ps || !field) return;
             this.handleStageField(ps.split(',').map(Number), field, t.value);
@@ -1129,6 +1227,7 @@ export class SpellCreator {
         this.viz.start();
         // Re-render every open so element picker and stage tree reflect current unlock/element state
         this.renderSlotTabs();
+        this.renderSpellProps();
         this.renderStageTree();
         this.renderStageEditor();
         this.chainUpdatePreview();
@@ -1153,6 +1252,15 @@ export class SpellCreator {
             this.selectedStagePath = [0];
             if (this.isOpen) { this.renderStageTree(); this.renderStageEditor(); this.chainUpdatePreview(); }
         }
+    }
+
+    setUnlockedMods(mods: ReadonlySet<SpellMod>): void {
+        this.unlockedSpellMods = new Set(mods);
+        // Remove any addedMods that are no longer unlocked
+        for (const m of this.addedMods) {
+            if (!this.unlockedSpellMods.has(m)) this.addedMods.delete(m);
+        }
+        if (this.isOpen) { this.renderSpellProps(); this.chainUpdatePreview(); }
     }
 
     setUnlockedTypes(types: ReadonlySet<StageElement>): void {

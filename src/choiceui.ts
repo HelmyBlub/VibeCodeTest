@@ -1,18 +1,20 @@
-import type { StageElement } from './types';
-
-const ELEM_ICON: Partial<Record<StageElement, string>> = {
+const ITEM_ICON: Record<string, string> = {
     fire: '🔥', ice: '❄', lightning: '⚡', heal: '💚', carrier: '→', cloud: '☁',
+    castTime: '✦', cooldown: '⟳',
 };
-const ELEM_NAME: Partial<Record<StageElement, string>> = {
+const ITEM_NAME: Record<string, string> = {
     fire: 'Fire', ice: 'Ice', lightning: 'Lightning', heal: 'Heal', carrier: 'Carrier', cloud: 'Cloud',
+    castTime: 'Cast Time', cooldown: 'Cooldown',
 };
-const ELEM_DESC: Partial<Record<StageElement, string>> = {
+const ITEM_DESC: Record<string, string> = {
     fire:      'Burns enemies over time.',
     ice:       'Slows enemy movement.',
     lightning: 'Chains to nearby enemies.',
     heal:      'Floats forward, pulses healing to all nearby (friend & foe).',
     carrier:   'Launches child stages after a delay.',
     cloud:     'Stationary zone that fires child stages on a pulse.',
+    castTime:  'Add a channel time to spells — reduces mana cost in exchange for interruption risk.',
+    cooldown:  'Add a cooldown to spells — increases damage in exchange for waiting time.',
 };
 
 export class ChoiceUI {
@@ -35,7 +37,7 @@ export class ChoiceUI {
         document.body.appendChild(this.el);
     }
 
-    show(choices: StageElement[], onPick: (choice: StageElement) => void): void {
+    show(choices: string[], onPick: (choice: string) => void): void {
         const cards = choices.map(c => `
             <button data-val="${c}" style="
                 background:#16102a;color:#eee;
@@ -44,9 +46,9 @@ export class ChoiceUI {
                 cursor:pointer;min-width:150px;max-width:180px;
                 transition:border-color 0.15s;
             ">
-                <div style="font-size:44px;margin-bottom:10px;font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${ELEM_ICON[c] ?? c}</div>
-                <div style="font-weight:700;font-size:18px;margin-bottom:8px">${ELEM_NAME[c] ?? c}</div>
-                <div style="font-size:12px;color:#aaa;line-height:1.4">${ELEM_DESC[c] ?? ''}</div>
+                <div style="font-size:44px;margin-bottom:10px;font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${ITEM_ICON[c] ?? c}</div>
+                <div style="font-weight:700;font-size:18px;margin-bottom:8px">${ITEM_NAME[c] ?? c}</div>
+                <div style="font-size:12px;color:#aaa;line-height:1.4">${ITEM_DESC[c] ?? ''}</div>
             </button>
         `).join('');
 
@@ -64,7 +66,7 @@ export class ChoiceUI {
             btn.addEventListener('mouseleave', () => { btn.style.borderColor = '#7733cc'; });
             btn.addEventListener('click', () => {
                 this.hide();
-                onPick(btn.dataset['val'] as StageElement);
+                onPick(btn.dataset['val']!);
             });
         });
     }

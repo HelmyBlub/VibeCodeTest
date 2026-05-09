@@ -16,7 +16,7 @@ import {
     BOSS_MAX_HP, BOSS_MELEE_DAMAGE,
     BOUNDARY, DEV_MODE, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
 } from './constants';
-import type { Spell, SpellElement, SpellStage, StageElement } from './types';
+import type { Spell, SpellElement, SpellMod, SpellStage, StageElement } from './types';
 
 const canvas = document.getElementById('renderCanvas') as HTMLCanvasElement;
 const engine = new Engine(canvas, true);
@@ -38,13 +38,19 @@ const damageNumbers = new DamageNumbers(scene, canvas);
 
 // ── Unlocks ───────────────────────────────────────────────────────────────────
 
-const ALL_TYPES: StageElement[] = ['fire', 'ice', 'lightning', 'heal', 'carrier', 'cloud'];
+const ALL_TYPES:      StageElement[] = ['fire', 'ice', 'lightning', 'heal', 'carrier', 'cloud'];
+const ALL_SPELL_MODS: SpellMod[]     = ['castTime', 'cooldown'];
 const startElement = (['fire', 'ice', 'lightning'] as SpellElement[])[Math.floor(Math.random() * 3)];
-const unlocked = new Set<StageElement>([startElement]);
+const unlocked     = new Set<StageElement>([startElement]);
+const unlockedMods = new Set<SpellMod>();
 
 spellCreator.setUnlockedTypes(unlocked);
 spellCreator.setDefaultElement(startElement);
-typeLevels.setVisibleTypes(unlocked);
+
+function syncLevels(): void {
+    typeLevels.setVisible(new Set([...unlocked, ...unlockedMods]));
+}
+syncLevels();
 
 function onLevelUp(): void {
     const dmgMult  = typeLevels.getGlobalDamageMultiplier();
@@ -174,16 +180,19 @@ function handlePickup(): void {
     spellbook = null;
     choiceOpen = true;
 
-    // Build 3 random choices from not-yet-unlocked types
-    const pool = ALL_TYPES.filter(t => !unlocked.has(t));
-    const choices: StageElement[] = [];
+    // Build 3 random choices from not-yet-unlocked types AND spell mods
+    const pool: string[] = [
+        ...ALL_TYPES.filter(t => !unlocked.has(t)),
+        ...ALL_SPELL_MODS.filter(m => !unlockedMods.has(m)),
+    ];
+    const choices: string[] = [];
     while (choices.length < 3 && pool.length > 0) {
         const idx = Math.floor(Math.random() * pool.length);
         choices.push(pool.splice(idx, 1)[0]);
     }
 
     if (choices.length === 0) {
-        // All types already unlocked — just spawn next boss
+        // Everything already unlocked — just spawn next boss
         choiceOpen = false;
         bossSpawnPending = true;
         bossSpawnAt = Date.now() + 2000;
@@ -191,9 +200,14 @@ function handlePickup(): void {
     }
 
     choiceUI.show(choices, (picked) => {
-        unlocked.add(picked);
-        spellCreator.setUnlockedTypes(unlocked);
-        typeLevels.setVisibleTypes(unlocked);
+        if (ALL_SPELL_MODS.includes(picked as SpellMod)) {
+            unlockedMods.add(picked as SpellMod);
+            spellCreator.setUnlockedMods(unlockedMods);
+        } else {
+            unlocked.add(picked as StageElement);
+            spellCreator.setUnlockedTypes(unlocked);
+            syncLevels();
+        }
         choiceOpen = false;
         bossSpawnPending = true;
         bossSpawnAt = Date.now() + 2000;
@@ -228,9 +242,11 @@ window.addEventListener('keydown', e => {
 
     if (DEV_MODE && e.key === 'F1') {
         e.preventDefault();
-        for (const t of ALL_TYPES) unlocked.add(t);
+        for (const t of ALL_TYPES)      unlocked.add(t);
+        for (const m of ALL_SPELL_MODS) unlockedMods.add(m);
         spellCreator.setUnlockedTypes(unlocked);
-        typeLevels.setVisibleTypes(unlocked);
+        spellCreator.setUnlockedMods(unlockedMods);
+        syncLevels();
         return;
     }
 

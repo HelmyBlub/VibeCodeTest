@@ -1,39 +1,47 @@
-import type { StageElement } from './types';
+import type { Learnable, SpellMod, StageElement } from './types';
 
 const MAX_LEVEL = 99;
 
-const ALL_ELEMENTS: StageElement[] = ['fire', 'ice', 'lightning', 'heal', 'carrier', 'cloud'];
+const ALL_STAGE_ELEMENTS: StageElement[] = ['fire', 'ice', 'lightning', 'heal', 'carrier', 'cloud'];
+const ALL_SPELL_MODS:      SpellMod[]    = ['castTime', 'cooldown'];
+const ALL_LEARNABLES:      Learnable[]   = [...ALL_STAGE_ELEMENTS, ...ALL_SPELL_MODS];
 
-const ELEM_ICON: Record<StageElement, string> = {
+const ITEM_ICON: Record<Learnable, string> = {
     fire: '🔥', ice: '❄', lightning: '⚡', heal: '💚', carrier: '→', cloud: '☁',
+    castTime: '✦', cooldown: '⟳',
 };
-const ELEM_COLOR: Record<StageElement, string> = {
+const ITEM_COLOR: Record<Learnable, string> = {
     fire: '#ff6633', ice: '#44bbff', lightning: '#ffdd22',
     heal: '#44ff88', carrier: '#9999dd', cloud: '#66cccc',
+    castTime: '#ddaaff', cooldown: '#ffaadd',
+};
+const ITEM_NAME: Record<Learnable, string> = {
+    fire: 'Fire', ice: 'Ice', lightning: 'Lightning', heal: 'Heal',
+    carrier: 'Carrier', cloud: 'Cloud',
+    castTime: 'Cast Time', cooldown: 'Cooldown',
 };
 
-// Cumulative XP to reach level N: 200 * N * (N+1) / 2 = 100 * N * (N+1)
+// Cumulative XP to reach level N: 100 * N * (N+1)
 // XP required to go from level N-1 → N: 200 * N
 function cumulativeXpForLevel(n: number): number {
     return 100 * n * (n + 1);
 }
 
 function levelFromXp(xp: number): number {
-    // Solve 100*N*(N+1) <= xp:  N^2 + N - xp/100 = 0  →  N = floor((-1 + sqrt(1 + 4*xp/100)) / 2)
     return Math.min(MAX_LEVEL, Math.floor((-1 + Math.sqrt(1 + 4 * xp / 100)) / 2));
 }
 
 export class TypeLevelSystem {
-    private readonly xp:     Record<StageElement, number>;
-    private readonly levels: Record<StageElement, number>;
-    private visibleTypes: Set<StageElement> = new Set();
+    private readonly xp:     Record<Learnable, number>;
+    private readonly levels: Record<Learnable, number>;
+    private visibleTypes: Set<Learnable> = new Set();
     private readonly panelEl: HTMLElement;
     private readonly notifEl: HTMLElement;
     private notifTimer = 0;
 
     constructor() {
-        this.xp     = Object.fromEntries(ALL_ELEMENTS.map(e => [e, 0])) as Record<StageElement, number>;
-        this.levels = Object.fromEntries(ALL_ELEMENTS.map(e => [e, 0])) as Record<StageElement, number>;
+        this.xp     = Object.fromEntries(ALL_LEARNABLES.map(e => [e, 0])) as Record<Learnable, number>;
+        this.levels = Object.fromEntries(ALL_LEARNABLES.map(e => [e, 0])) as Record<Learnable, number>;
 
         this.panelEl = document.createElement('div');
         Object.assign(this.panelEl.style, {
@@ -71,26 +79,26 @@ export class TypeLevelSystem {
         document.body.appendChild(this.notifEl);
     }
 
-    setVisibleTypes(types: Iterable<StageElement>): void {
+    setVisible(types: Iterable<Learnable>): void {
         this.visibleTypes = new Set(types);
         this.render();
     }
 
     /**
-     * Award XP to every unique element in the chain.
-     * xpAmount: enemy.maxHp for kills, actual HP healed for heal ticks.
+     * Award XP to every unique learnable in the chain.
      * Returns true if any level-up occurred.
      */
-    addXp(chain: StageElement[], xpAmount: number): boolean {
+    addXp(chain: Learnable[], xpAmount: number): boolean {
         if (!chain.length || xpAmount <= 0) return false;
         const unique = [...new Set(chain)];
         let anyLevelUp = false;
-        for (const el of unique) {
-            const prev = this.levels[el];
-            this.xp[el] += xpAmount;
-            this.levels[el] = levelFromXp(this.xp[el]);
-            if (this.levels[el] > prev) {
-                this.showLevelUp(el, this.levels[el]);
+        for (const item of unique) {
+            if (!(item in this.xp)) continue;
+            const prev = this.levels[item];
+            this.xp[item] += xpAmount;
+            this.levels[item] = levelFromXp(this.xp[item]);
+            if (this.levels[item] > prev) {
+                this.showLevelUp(item, this.levels[item]);
                 anyLevelUp = true;
             }
         }
@@ -98,20 +106,20 @@ export class TypeLevelSystem {
         return anyLevelUp;
     }
 
-    /** Global damage multiplier: additive +5% per total level across all types. */
+    /** Global damage multiplier: additive +5% per total level across all learnables. */
     getGlobalDamageMultiplier(): number {
-        const total = ALL_ELEMENTS.reduce((s, el) => s + this.levels[el], 0);
+        const total = ALL_LEARNABLES.reduce((s, el) => s + this.levels[el], 0);
         return 1.0 + total * 0.05;
     }
 
     /** Global mana cost factor: 0.97 ^ totalLevels — approaches 0, never reaches it. */
     getGlobalManaCostFactor(): number {
-        const total = ALL_ELEMENTS.reduce((s, el) => s + this.levels[el], 0);
+        const total = ALL_LEARNABLES.reduce((s, el) => s + this.levels[el], 0);
         return Math.pow(0.97, total);
     }
 
     private render(): void {
-        const visible  = ALL_ELEMENTS.filter(el => this.visibleTypes.has(el));
+        const visible  = ALL_LEARNABLES.filter(el => this.visibleTypes.has(el));
         const dmgMult  = this.getGlobalDamageMultiplier();
         const manaMult = this.getGlobalManaCostFactor();
         const dmgPct   = Math.round((dmgMult - 1) * 100);
@@ -131,11 +139,11 @@ export class TypeLevelSystem {
                     background:rgba(0,0,0,0.55);border-radius:8px;padding:4px 9px">
                     <span style="font-size:15px;
                         font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif"
-                    >${ELEM_ICON[el]}</span>
+                    >${ITEM_ICON[el]}</span>
                     <span style="color:#ccc;font-size:12px;min-width:30px">Lv${lv}</span>
                     <div style="width:60px;height:7px;background:#333;border-radius:4px;overflow:hidden">
                         <div style="width:${progress}%;height:100%;
-                            background:${ELEM_COLOR[el]};border-radius:4px;transition:width 0.2s"></div>
+                            background:${ITEM_COLOR[el]};border-radius:4px;transition:width 0.2s"></div>
                     </div>
                 </div>
             `;
@@ -152,10 +160,10 @@ export class TypeLevelSystem {
         this.panelEl.innerHTML = rows + statsRow;
     }
 
-    private showLevelUp(el: StageElement, newLevel: number): void {
-        const name = el.charAt(0).toUpperCase() + el.slice(1);
+    private showLevelUp(item: Learnable, newLevel: number): void {
+        const name = ITEM_NAME[item];
         this.notifEl.innerHTML =
-            `${ELEM_ICON[el]} ${name} Level Up! → Lv${newLevel}<br>` +
+            `${ITEM_ICON[item]} ${name} Level Up! → Lv${newLevel}<br>` +
             `<span style="font-size:13px;color:#aaa">All spells deal more damage!</span>`;
         this.notifEl.style.display = 'block';
         clearTimeout(this.notifTimer);

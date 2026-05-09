@@ -12,7 +12,7 @@ export interface Enemy {
     isBoss: boolean;
     lastMelee: number;
     meleeDamage: number;
-    lastHitChain?: StageElement[];
+    lastHitChain?: Learnable[];
     // elemental effects
     burnEnd:      number;
     burnDamage:   number;
@@ -41,6 +41,8 @@ export interface Fireball {
 export type SpellElement = 'fire' | 'ice' | 'lightning' | 'heal';
 export type StageElement = SpellElement | 'carrier' | 'cloud';
 export type StageTrigger = 'delay' | 'impact' | 'interval';
+export type SpellMod = 'castTime' | 'cooldown';
+export type Learnable = StageElement | SpellMod;
 
 export interface SpellStage {
     element:      StageElement;
