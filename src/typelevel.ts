@@ -149,9 +149,12 @@ export class TypeLevelSystem {
             `;
         }).join('');
 
+        const total = ALL_LEARNABLES.reduce((s, el) => s + this.levels[el], 0);
+
         const statsRow = visible.length > 0 ? `
             <div style="background:rgba(0,0,0,0.55);border-radius:8px;padding:4px 9px;
                 font-size:11px;color:#bbb;display:flex;flex-direction:column;gap:2px">
+                <span style="color:#cc99ff;font-weight:700">Total Lv ${total}</span>
                 <span>⚔ DMG <span style="color:#ffdd88">+${dmgPct}%</span></span>
                 <span>💧 MANA <span style="color:#88ddff">-${manaPct}%</span></span>
             </div>

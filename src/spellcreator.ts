@@ -1246,12 +1246,9 @@ ${budgetWarning}
         this.isOpen = true;
         this.overlay.style.display = 'flex';
         this.viz.start();
-        // Re-render every open so element picker and stage tree reflect current unlock/element state
-        this.renderSlotTabs();
-        this.renderSpellProps();
-        this.renderStageTree();
-        this.renderStageEditor();
-        this.chainUpdatePreview();
+        // Reload from slot so external writes to slots[] (e.g. starter spell) are reflected
+        // and newly unlocked types are shown in pickers
+        this.selectSlot(this.activeSlot);
         this.updateViz();
     }
     close():  void { this.isOpen = false; this.overlay.style.display = 'none'; this.viz.stop(); }

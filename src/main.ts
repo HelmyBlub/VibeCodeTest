@@ -76,23 +76,22 @@ combat.onDamageDealt = (pos, amount, element) => {
 // ── Starter spell ─────────────────────────────────────────────────────────────
 
 function makeStarterStage(element: SpellElement): SpellStage {
-    const cooldown = 2000;
     return {
         element, power: 50, pitch: 0, yaw: 0,
         count: 1, spread: 0, yawSpread: 0,
         stationary: false, trigger: 'delay', triggerMs: 500, duration: 3000,
-        damage:      calcDamage(50, cooldown),
-        burnDamage:  element === 'fire'      ? calcBurnDamage(50, cooldown) : 0,
+        damage:      calcDamage(50, 0),
+        burnDamage:  element === 'fire'      ? calcBurnDamage(50, 0) : 0,
         burnDuration: element === 'fire'     ? 3000 : undefined,
         slowPercent:  element === 'ice'      ? 50   : undefined,
         jumpCount:    element === 'lightning' ? 2    : undefined,
-        offsetX: 0, offsetY: 1.5, offsetZ: 0.5,
+        offsetX: 0, offsetY: 0, offsetZ: 0,
         children: [],
     };
 }
 
 const starterSpell: Spell = {
-    castTime: 0, cooldown: 2000,
+    castTime: 0, cooldown: 0,
     manaCost: calcManaCost(50, 0),
     projectiles: [],
     stages: [makeStarterStage(startElement)],
@@ -203,6 +202,7 @@ function handlePickup(): void {
         if (ALL_SPELL_MODS.includes(picked as SpellMod)) {
             unlockedMods.add(picked as SpellMod);
             spellCreator.setUnlockedMods(unlockedMods);
+            syncLevels();
         } else {
             unlocked.add(picked as StageElement);
             spellCreator.setUnlockedTypes(unlocked);
