@@ -14,7 +14,7 @@ import { TypeLevelSystem } from './typelevel';
 import { DamageNumbers } from './damagenumbers';
 import {
     BOSS_MAX_HP, BOSS_MELEE_DAMAGE,
-    BOUNDARY, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
+    BOUNDARY, DEV_MODE, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
 } from './constants';
 import type { Spell, SpellElement, SpellStage, StageElement } from './types';
 
@@ -220,8 +220,17 @@ window.addEventListener('keydown', e => {
             for (let i = 0; i < 4; i++) {
                 if (slotLastCast[i] > 0) slotLastCast[i] += paused;
             }
+            combat.resyncClock();
         }
         spellCreator.toggle();
+        return;
+    }
+
+    if (DEV_MODE && e.key === 'F1') {
+        e.preventDefault();
+        for (const t of ALL_TYPES) unlocked.add(t);
+        spellCreator.setUnlockedTypes(unlocked);
+        typeLevels.setVisibleTypes(unlocked);
         return;
     }
 

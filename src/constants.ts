@@ -1,3 +1,6 @@
+// Dev / testing — set to false before shipping
+export const DEV_MODE = true;
+
 // Player
 export const MOVE_SPEED = 0.1;
 export const GRAVITY = -0.01;

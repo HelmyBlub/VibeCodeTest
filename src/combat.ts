@@ -74,6 +74,17 @@ export class CombatSystem {
 
     setDamageMultiplier(mult: number): void { this.damageMultiplier = mult; }
 
+    resyncClock(): void {
+        const realNow = Date.now();
+        const drift = realNow - this.gameTime;
+        if (drift <= 0) return;
+        this.gameTime = realNow;
+        for (const ls of this.liveStages) {
+            ls.spawnTime += drift;
+            ls.lastFire  += drift;
+        }
+    }
+
     /** Called once per heal tick when something was healed. amount = total HP actually restored. */
     onHealXp?: (chain: StageElement[], amount: number) => void;
     /** Called on every direct damage hit. */
