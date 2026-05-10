@@ -89,3 +89,23 @@ export const HEAL_PASSIVE_DECAY   = 0.12;  // fraction of healAmount depleted pe
 
 // Staged spell system
 export const STAGE_CARRIER_SPEED = 0.3;  // units/frame for 'none' element stages
+
+// Regen enemy
+export const REGEN_HP_MULT        = 1.5;
+export const REGEN_SPEED          = 0.022;
+export const REGEN_RATE           = 6;    // HP per second
+export const REGEN_TICK_INTERVAL  = 500;  // ms between regen ticks
+
+// Flyer enemy
+export const FLYER_HP_MULT             = 0.8;
+export const FLYER_SPEED               = 0.03;
+export const FLYER_HEIGHT              = 7.0;   // world-space hover height
+export const FLYER_MIN_DIST            = 12;    // moves away if closer than this
+export const FLYER_MAX_DIST            = 18;    // moves closer if farther than this
+export const FLYER_SHOOT_RANGE         = 22;    // max horizontal distance to player before shooting
+export const FLYER_SHOT_INTERVAL       = 3500;  // ms between projectile shots
+export const FLYER_PROJECTILE_SPEED    = 0.08;  // units/frame toward player
+export const FLYER_PROJECTILE_DAMAGE   = 15;
+export const FLYER_HIT_RADIUS          = 1.0;   // 3D hit radius
+export const FLYER_PROJECTILE_LIFETIME = 7000;  // ms failsafe expiry
+export const FLYER_BOSS_HP_MULT        = 0.6;   // boss flyer has less HP (hard aerial target)

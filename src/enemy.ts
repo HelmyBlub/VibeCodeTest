@@ -6,8 +6,12 @@ import {
     BRUTE_HP_MULT, BRUTE_SPEED,
     ENEMY_MAX_HP, ENEMY_MELEE_DAMAGE, ENEMY_MELEE_INTERVAL, ENEMY_MELEE_RANGE, ENEMY_SPEED,
     FIRE_BURN_INTERVAL,
+    REGEN_HP_MULT, REGEN_SPEED, REGEN_RATE, REGEN_TICK_INTERVAL,
+    FLYER_HP_MULT, FLYER_SPEED, FLYER_HEIGHT, FLYER_MIN_DIST, FLYER_MAX_DIST,
+    FLYER_SHOOT_RANGE, FLYER_SHOT_INTERVAL, FLYER_PROJECTILE_SPEED, FLYER_PROJECTILE_DAMAGE,
+    FLYER_HIT_RADIUS, FLYER_PROJECTILE_LIFETIME,
 } from './constants';
-import type { Enemy, EnemyType } from './types';
+import type { Enemy, EnemyType, FlyerProjectile } from './types';
 
 export class EnemyManager {
     readonly enemies: Enemy[] = [];
@@ -17,13 +21,18 @@ export class EnemyManager {
     private readonly headMat:       StandardMaterial;
     private readonly bruteBodyMat:  StandardMaterial;
     private readonly bruteHeadMat:  StandardMaterial;
-    private readonly bossBodyMat:   StandardMaterial;
-    private readonly bossHeadMat:   StandardMaterial;
+    private readonly regenBodyMat:  StandardMaterial;
+    private readonly regenHeadMat:  StandardMaterial;
+    private readonly flyerBodyMat:  StandardMaterial;
+    private readonly flyerWingMat:  StandardMaterial;
+    private readonly flyerHeadMat:  StandardMaterial;
     private readonly hpBgMat:       StandardMaterial;
     private readonly hpBarMat:      StandardMaterial;
     private readonly bossHpBarMat:  StandardMaterial;
     private readonly burnMat:       StandardMaterial;
+    private readonly flyerProjMat:  StandardMaterial;
 
+    private readonly flyerProjectiles: FlyerProjectile[] = [];
     private bossDeath: (() => void) | null = null;
 
     constructor(private readonly scene: Scene) {
@@ -39,12 +48,20 @@ export class EnemyManager {
         this.bruteHeadMat = new StandardMaterial('bruteHeadMat', scene);
         this.bruteHeadMat.diffuseColor = new Color3(0.55, 0.25, 0.08);
 
-        this.bossBodyMat = new StandardMaterial('bossBodyMat', scene);
-        this.bossBodyMat.diffuseColor = new Color3(0.5, 0.05, 0.7);
-        this.bossBodyMat.emissiveColor = new Color3(0.1, 0.0, 0.15);
+        this.regenBodyMat = new StandardMaterial('regenBodyMat', scene);
+        this.regenBodyMat.diffuseColor = new Color3(0.1, 0.65, 0.2);
 
-        this.bossHeadMat = new StandardMaterial('bossHeadMat', scene);
-        this.bossHeadMat.diffuseColor = new Color3(0.4, 0.05, 0.6);
+        this.regenHeadMat = new StandardMaterial('regenHeadMat', scene);
+        this.regenHeadMat.diffuseColor = new Color3(0.2, 0.82, 0.3);
+
+        this.flyerBodyMat = new StandardMaterial('flyerBodyMat', scene);
+        this.flyerBodyMat.diffuseColor = new Color3(0.05, 0.5, 0.65);
+
+        this.flyerWingMat = new StandardMaterial('flyerWingMat', scene);
+        this.flyerWingMat.diffuseColor = new Color3(0.1, 0.65, 0.78);
+
+        this.flyerHeadMat = new StandardMaterial('flyerHeadMat', scene);
+        this.flyerHeadMat.diffuseColor = new Color3(0.05, 0.7, 0.7);
 
         this.hpBgMat = new StandardMaterial('enHpBgMat', scene);
         this.hpBgMat.diffuseColor = new Color3(0.15, 0.15, 0.15);
@@ -62,6 +79,10 @@ export class EnemyManager {
         this.burnMat.diffuseColor  = new Color3(1.0, 0.35, 0.0);
         this.burnMat.emissiveColor = new Color3(0.8, 0.25, 0.0);
         this.burnMat.alpha = 0.55;
+
+        this.flyerProjMat = new StandardMaterial('flyerProjMat', scene);
+        this.flyerProjMat.diffuseColor  = new Color3(0.9, 0.2, 0.85);
+        this.flyerProjMat.emissiveColor = new Color3(0.55, 0.08, 0.5);
     }
 
     get normalCount(): number {
@@ -73,92 +94,173 @@ export class EnemyManager {
     }
 
     spawn(x: number, z: number, baseHp = ENEMY_MAX_HP, type: EnemyType = 'simple'): void {
-        const isBrute = type === 'brute';
-        const hp      = isBrute ? Math.round(baseHp * BRUTE_HP_MULT) : baseHp;
-        const speed   = isBrute ? BRUTE_SPEED : ENEMY_SPEED;
-
         const id = this.enemies.length;
         const root = new TransformNode(`en${id}`, this.scene);
-        root.position = new Vector3(x, 0, z);
+        const extraMeshes: Mesh[] = [];
 
-        const capsuleR = isBrute ? 0.52 : 0.3;
-        const capsuleH = isBrute ? 1.9  : 1.6;
-        const headD    = isBrute ? 0.62 : 0.45;
-        const headY    = isBrute ? 2.15 : 1.85;
-        const hpBarY   = isBrute ? 3.0  : 2.6;
-        const burnD    = isBrute ? 1.05 : 0.75;
+        let hp: number, speed: number, eb: Mesh, eh: Mesh;
+        let hpBarY: number, burnD: number, burnY: number;
 
-        const eb = MeshBuilder.CreateCapsule(`enB${id}`, { height: capsuleH, radius: capsuleR, tessellation: 10 }, this.scene);
-        eb.position.y = capsuleH / 2; eb.parent = root;
-        eb.material = isBrute ? this.bruteBodyMat : this.bodyMat;
-
-        const eh = MeshBuilder.CreateSphere(`enH${id}`, { diameter: headD, segments: 6 }, this.scene);
-        eh.position.y = headY; eh.parent = root;
-        eh.material = isBrute ? this.bruteHeadMat : this.headMat;
+        switch (type) {
+            case 'brute': {
+                hp = Math.round(baseHp * BRUTE_HP_MULT);
+                speed = BRUTE_SPEED;
+                root.position = new Vector3(x, 0, z);
+                eb = MeshBuilder.CreateCapsule(`enB${id}`, { height: 1.9, radius: 0.52, tessellation: 10 }, this.scene);
+                eb.position.y = 0.95; eb.parent = root; eb.material = this.bruteBodyMat;
+                eh = MeshBuilder.CreateSphere(`enH${id}`, { diameter: 0.62, segments: 6 }, this.scene);
+                eh.position.y = 2.15; eh.parent = root; eh.material = this.bruteHeadMat;
+                hpBarY = 3.0; burnD = 1.05; burnY = 0.95;
+                break;
+            }
+            case 'regen': {
+                hp = Math.round(baseHp * REGEN_HP_MULT);
+                speed = REGEN_SPEED;
+                root.position = new Vector3(x, 0, z);
+                // Round blob body instead of capsule
+                eb = MeshBuilder.CreateSphere(`enB${id}`, { diameter: 1.0, segments: 8 }, this.scene);
+                eb.position.y = 0.5; eb.parent = root; eb.material = this.regenBodyMat;
+                eh = MeshBuilder.CreateSphere(`enH${id}`, { diameter: 0.42, segments: 6 }, this.scene);
+                eh.position.y = 1.12; eh.parent = root; eh.material = this.regenHeadMat;
+                hpBarY = 1.75; burnD = 1.1; burnY = 0.5;
+                break;
+            }
+            case 'flyer': {
+                hp = Math.round(baseHp * FLYER_HP_MULT);
+                speed = FLYER_SPEED;
+                root.position = new Vector3(x, FLYER_HEIGHT, z);
+                // Compact sphere body
+                eb = MeshBuilder.CreateSphere(`enB${id}`, { diameter: 0.8, segments: 8 }, this.scene);
+                eb.position.y = 0; eb.parent = root; eb.material = this.flyerBodyMat;
+                eh = MeshBuilder.CreateSphere(`enH${id}`, { diameter: 0.35, segments: 6 }, this.scene);
+                eh.position.y = 0.55; eh.parent = root; eh.material = this.flyerHeadMat;
+                // Wings — flat boxes angled slightly upward
+                const wL = MeshBuilder.CreateBox(`enWL${id}`, { width: 1.0, height: 0.07, depth: 0.4 }, this.scene);
+                wL.position = new Vector3(-0.9, 0, 0); wL.rotation.z = 0.3;
+                wL.parent = root; wL.material = this.flyerWingMat;
+                const wR = MeshBuilder.CreateBox(`enWR${id}`, { width: 1.0, height: 0.07, depth: 0.4 }, this.scene);
+                wR.position = new Vector3(0.9, 0, 0); wR.rotation.z = -0.3;
+                wR.parent = root; wR.material = this.flyerWingMat;
+                extraMeshes.push(wL, wR);
+                hpBarY = 1.1; burnD = 0.85; burnY = 0;
+                break;
+            }
+            default: { // simple
+                hp = baseHp;
+                speed = ENEMY_SPEED;
+                root.position = new Vector3(x, 0, z);
+                eb = MeshBuilder.CreateCapsule(`enB${id}`, { height: 1.6, radius: 0.3, tessellation: 10 }, this.scene);
+                eb.position.y = 0.8; eb.parent = root; eb.material = this.bodyMat;
+                eh = MeshBuilder.CreateSphere(`enH${id}`, { diameter: 0.45, segments: 6 }, this.scene);
+                eh.position.y = 1.85; eh.parent = root; eh.material = this.headMat;
+                hpBarY = 2.6; burnD = 0.75; burnY = 0.8;
+                break;
+            }
+        }
 
         const hpBg = MeshBuilder.CreateBox(`enHpBg${id}`, { width: 1.0, height: 0.13, depth: 0.06 }, this.scene);
         hpBg.position.y = hpBarY; hpBg.parent = root;
-        hpBg.material = this.hpBgMat;
-        hpBg.billboardMode = Mesh.BILLBOARDMODE_ALL;
+        hpBg.material = this.hpBgMat; hpBg.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
         const hpBar = MeshBuilder.CreateBox(`enHpBar${id}`, { width: 1.0, height: 0.13, depth: 0.08 }, this.scene);
         hpBar.position.y = hpBarY; hpBar.parent = root;
-        hpBar.material = this.hpBarMat;
-        hpBar.billboardMode = Mesh.BILLBOARDMODE_ALL;
+        hpBar.material = this.hpBarMat; hpBar.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
         const burnIndicator = MeshBuilder.CreateSphere(`enBurn${id}`, { diameter: burnD, segments: 6 }, this.scene);
-        burnIndicator.position.y = capsuleH / 2;
-        burnIndicator.parent = root;
-        burnIndicator.material = this.burnMat;
-        burnIndicator.isVisible = false;
+        burnIndicator.position.y = burnY; burnIndicator.parent = root;
+        burnIndicator.material = this.burnMat; burnIndicator.isVisible = false;
 
         this.enemies.push({
-            root, eb, eh, hpBg, hpBar, burnIndicator,
+            root, eb, eh, hpBg, hpBar, burnIndicator, extraMeshes,
             hp, maxHp: hp, isBoss: false, type, speed,
             lastMelee: 0, meleeDamage: ENEMY_MELEE_DAMAGE,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
             slowEnd: 0, slowFactor: 1,
+            regenRate: type === 'regen' ? REGEN_RATE : 0, lastRegen: 0,
+            lastShot: 0,
         });
     }
 
-    spawnBoss(x: number, z: number, hp: number, meleeDamage: number, onDeath: () => void): void {
+    spawnBoss(x: number, z: number, hp: number, meleeDamage: number, type: EnemyType, onDeath: () => void): void {
         this.bossDeath = onDeath;
         const id = this.enemies.length;
+        const s = 1 / BOSS_SCALE; // local-space compensator for HP bar
+        const yPos = type === 'flyer' ? FLYER_HEIGHT : 0;
+
         const root = new TransformNode(`boss${id}`, this.scene);
-        root.position = new Vector3(x, 0, z);
+        root.position = new Vector3(x, yPos, z);
         root.scaling = new Vector3(BOSS_SCALE, BOSS_SCALE, BOSS_SCALE);
 
-        const eb = MeshBuilder.CreateCapsule(`bossB${id}`, { height: 1.6, radius: 0.3, tessellation: 12 }, this.scene);
-        eb.position.y = 0.8; eb.parent = root; eb.material = this.bossBodyMat;
+        const extraMeshes: Mesh[] = [];
+        let eb: Mesh, eh: Mesh, hpBarY: number, burnY: number;
 
-        const eh = MeshBuilder.CreateSphere(`bossH${id}`, { diameter: 0.45, segments: 8 }, this.scene);
-        eh.position.y = 1.85; eh.parent = root; eh.material = this.bossHeadMat;
+        switch (type) {
+            case 'brute': {
+                eb = MeshBuilder.CreateCapsule(`bossB${id}`, { height: 1.9, radius: 0.52, tessellation: 12 }, this.scene);
+                eb.position.y = 0.95; eb.parent = root; eb.material = this.bruteBodyMat;
+                eh = MeshBuilder.CreateSphere(`bossH${id}`, { diameter: 0.62, segments: 8 }, this.scene);
+                eh.position.y = 2.15; eh.parent = root; eh.material = this.bruteHeadMat;
+                hpBarY = 3.2; burnY = 0.95;
+                break;
+            }
+            case 'regen': {
+                eb = MeshBuilder.CreateSphere(`bossB${id}`, { diameter: 1.0, segments: 8 }, this.scene);
+                eb.position.y = 0.5; eb.parent = root; eb.material = this.regenBodyMat;
+                eh = MeshBuilder.CreateSphere(`bossH${id}`, { diameter: 0.42, segments: 6 }, this.scene);
+                eh.position.y = 1.12; eh.parent = root; eh.material = this.regenHeadMat;
+                hpBarY = 2.2; burnY = 0.5;
+                break;
+            }
+            case 'flyer': {
+                eb = MeshBuilder.CreateSphere(`bossB${id}`, { diameter: 0.8, segments: 8 }, this.scene);
+                eb.position.y = 0; eb.parent = root; eb.material = this.flyerBodyMat;
+                eh = MeshBuilder.CreateSphere(`bossH${id}`, { diameter: 0.35, segments: 6 }, this.scene);
+                eh.position.y = 0.55; eh.parent = root; eh.material = this.flyerHeadMat;
+                const wL = MeshBuilder.CreateBox(`bossWL${id}`, { width: 1.0, height: 0.07, depth: 0.4 }, this.scene);
+                wL.position = new Vector3(-0.9, 0, 0); wL.rotation.z = 0.3;
+                wL.parent = root; wL.material = this.flyerWingMat;
+                const wR = MeshBuilder.CreateBox(`bossWR${id}`, { width: 1.0, height: 0.07, depth: 0.4 }, this.scene);
+                wR.position = new Vector3(0.9, 0, 0); wR.rotation.z = -0.3;
+                wR.parent = root; wR.material = this.flyerWingMat;
+                extraMeshes.push(wL, wR);
+                hpBarY = 1.5; burnY = 0;
+                break;
+            }
+            default: { // simple boss (first boss type before brute was added)
+                eb = MeshBuilder.CreateCapsule(`bossB${id}`, { height: 1.6, radius: 0.3, tessellation: 12 }, this.scene);
+                eb.position.y = 0.8; eb.parent = root; eb.material = this.bodyMat;
+                eh = MeshBuilder.CreateSphere(`bossH${id}`, { diameter: 0.45, segments: 8 }, this.scene);
+                eh.position.y = 1.85; eh.parent = root; eh.material = this.headMat;
+                hpBarY = 2.7; burnY = 0.8;
+                break;
+            }
+        }
 
-        // HP bar is larger and compensated for scale (width in local space = 1.6/BOSS_SCALE to appear wider)
-        const barWidth = 1.6 / BOSS_SCALE;
-        const hpBg = MeshBuilder.CreateBox(`bossHpBg${id}`, { width: barWidth, height: 0.1 / BOSS_SCALE, depth: 0.06 }, this.scene);
-        hpBg.position.y = 2.7; hpBg.parent = root;
-        hpBg.material = this.hpBgMat;
-        hpBg.billboardMode = Mesh.BILLBOARDMODE_ALL;
+        const barW = 1.6 * s;
+        const hpBg = MeshBuilder.CreateBox(`bossHpBg${id}`, { width: barW, height: 0.1 * s, depth: 0.06 }, this.scene);
+        hpBg.position.y = hpBarY; hpBg.parent = root;
+        hpBg.material = this.hpBgMat; hpBg.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
-        const hpBar = MeshBuilder.CreateBox(`bossHpBar${id}`, { width: barWidth, height: 0.1 / BOSS_SCALE, depth: 0.08 }, this.scene);
-        hpBar.position.y = 2.7; hpBar.parent = root;
-        hpBar.material = this.bossHpBarMat;
-        hpBar.billboardMode = Mesh.BILLBOARDMODE_ALL;
+        const hpBar = MeshBuilder.CreateBox(`bossHpBar${id}`, { width: barW, height: 0.1 * s, depth: 0.08 }, this.scene);
+        hpBar.position.y = hpBarY; hpBar.parent = root;
+        hpBar.material = this.bossHpBarMat; hpBar.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
-        // burnIndicator in local space (root is scaled by BOSS_SCALE, so diameter/position are local)
         const burnIndicator = MeshBuilder.CreateSphere(`bossBurn${id}`, { diameter: 0.8, segments: 6 }, this.scene);
-        burnIndicator.position.y = 0.8;
-        burnIndicator.parent = root;
-        burnIndicator.material = this.burnMat;
-        burnIndicator.isVisible = false;
+        burnIndicator.position.y = burnY; burnIndicator.parent = root;
+        burnIndicator.material = this.burnMat; burnIndicator.isVisible = false;
+
+        const bossSpeed = type === 'flyer' ? FLYER_SPEED
+            : type === 'brute' ? BRUTE_SPEED
+            : ENEMY_SPEED;
 
         this.enemies.push({
-            root, eb, eh, hpBg, hpBar, burnIndicator,
-            hp, maxHp: hp, isBoss: true, type: 'simple', speed: ENEMY_SPEED,
+            root, eb, eh, hpBg, hpBar, burnIndicator, extraMeshes,
+            hp, maxHp: hp, isBoss: true, type, speed: bossSpeed,
             lastMelee: 0, meleeDamage,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
             slowEnd: 0, slowFactor: 1,
+            regenRate: type === 'regen' ? REGEN_RATE * 2 : 0, lastRegen: 0,
+            lastShot: 0,
         });
     }
 
@@ -167,14 +269,15 @@ export class EnemyManager {
         const wasBoss = en.isBoss;
         en.eb.dispose(); en.eh.dispose();
         en.hpBg.dispose(); en.hpBar.dispose();
-        en.burnIndicator.dispose(); en.root.dispose();
+        en.burnIndicator.dispose();
+        for (const m of en.extraMeshes) m.dispose();
+        en.root.dispose();
         if (wasBoss) {
             this.bossDeath?.();
             this.bossDeath = null;
         }
     }
 
-    // Prune disposed (hp<=0) enemies from array — safe to call between frames
     private cleanup(): void {
         for (let i = this.enemies.length - 1; i >= 0; i--) {
             if (this.enemies[i].hp <= 0) this.enemies.splice(i, 1);
@@ -184,12 +287,11 @@ export class EnemyManager {
     update(playerPos: Vector3, onHitPlayer: (damage: number) => void): void {
         this.cleanup();
         const now = Date.now();
+
         for (const en of this.enemies) {
             if (en.hp <= 0) continue;
 
-            const meleeInterval = en.isBoss ? BOSS_MELEE_INTERVAL : ENEMY_MELEE_INTERVAL;
-
-            // fire: damage over time
+            // Fire DoT tick
             const burning = now < en.burnEnd;
             en.burnIndicator.isVisible = burning;
             if (burning && now - en.lastBurnTick >= FIRE_BURN_INTERVAL) {
@@ -199,22 +301,104 @@ export class EnemyManager {
                 if (en.hp <= 0) { this.kill(en); continue; }
             }
 
-            // movement toward player (slowed if iced)
-            const toPlayer = playerPos.subtract(en.root.position);
-            toPlayer.y = 0;
-            const dist = toPlayer.length();
+            // Regen HP tick
+            if (en.regenRate > 0 && en.hp < en.maxHp && now - en.lastRegen >= REGEN_TICK_INTERVAL) {
+                en.lastRegen = now;
+                en.hp = Math.min(en.maxHp, en.hp + Math.round(en.regenRate * REGEN_TICK_INTERVAL / 1000));
+                en.hpBar.scaling.x = en.hp / en.maxHp;
+            }
 
-            // melee range accounts for boss scale
-            const effectiveRange = en.isBoss ? ENEMY_MELEE_RANGE * BOSS_SCALE : ENEMY_MELEE_RANGE;
-            const speed = now < en.slowEnd ? en.speed * en.slowFactor : en.speed;
+            if (en.type === 'flyer') {
+                this.updateFlyer(en, playerPos, now, onHitPlayer);
+            } else {
+                this.updateGroundEnemy(en, playerPos, now, onHitPlayer);
+            }
+        }
 
-            if (dist > effectiveRange) {
-                const step = toPlayer.normalize().scaleInPlace(speed);
-                en.root.position.addInPlace(step);
-                en.root.rotation.y = Math.atan2(step.x, step.z);
-            } else if (now - en.lastMelee > meleeInterval) {
-                en.lastMelee = now;
-                onHitPlayer(en.meleeDamage);
+        this.updateFlyerProjectiles(playerPos, now, onHitPlayer);
+    }
+
+    private updateGroundEnemy(en: Enemy, playerPos: Vector3, now: number, onHitPlayer: (dmg: number) => void): void {
+        const meleeInterval  = en.isBoss ? BOSS_MELEE_INTERVAL : ENEMY_MELEE_INTERVAL;
+        const effectiveRange = en.isBoss ? ENEMY_MELEE_RANGE * BOSS_SCALE : ENEMY_MELEE_RANGE;
+        const speed = now < en.slowEnd ? en.speed * en.slowFactor : en.speed;
+
+        const toPlayer = playerPos.subtract(en.root.position);
+        toPlayer.y = 0;
+        const dist = toPlayer.length();
+
+        if (dist > effectiveRange) {
+            const step = toPlayer.normalize().scaleInPlace(speed);
+            en.root.position.addInPlace(step);
+            en.root.rotation.y = Math.atan2(step.x, step.z);
+        } else if (now - en.lastMelee > meleeInterval) {
+            en.lastMelee = now;
+            onHitPlayer(en.meleeDamage);
+        }
+    }
+
+    private updateFlyer(en: Enemy, playerPos: Vector3, now: number, onHitPlayer: (dmg: number) => void): void {
+        // Lock to hover height
+        en.root.position.y = FLYER_HEIGHT;
+
+        // Horizontal distance maintenance
+        const toPlayer = playerPos.subtract(en.root.position);
+        toPlayer.y = 0;
+        const dist = toPlayer.length();
+        const speed = now < en.slowEnd ? en.speed * en.slowFactor : en.speed;
+
+        if (dist < FLYER_MIN_DIST) {
+            // Back away from player
+            const step = toPlayer.normalize().scaleInPlace(-speed);
+            en.root.position.addInPlace(step);
+            en.root.rotation.y = Math.atan2(toPlayer.x, toPlayer.z); // still face player
+        } else if (dist > FLYER_MAX_DIST) {
+            // Close in on player
+            const step = toPlayer.normalize().scaleInPlace(speed);
+            en.root.position.addInPlace(step);
+            en.root.rotation.y = Math.atan2(step.x, step.z);
+        }
+
+        // Shoot only when close enough
+        if (dist <= FLYER_SHOOT_RANGE && now - en.lastShot >= FLYER_SHOT_INTERVAL) {
+            en.lastShot = now;
+            this.spawnFlyerProjectile(en.root.position, playerPos);
+        }
+    }
+
+    private spawnFlyerProjectile(flyerPos: Vector3, playerPos: Vector3): void {
+        const id = this.flyerProjectiles.length;
+        const mesh = MeshBuilder.CreateSphere(`flyProj${id}`, { diameter: 0.35, segments: 5 }, this.scene);
+        mesh.position = flyerPos.clone();
+        mesh.material = this.flyerProjMat;
+
+        const dir = playerPos.subtract(flyerPos).normalize();
+        this.flyerProjectiles.push({
+            mesh,
+            vel: dir.scaleInPlace(FLYER_PROJECTILE_SPEED),
+            spawnTime: Date.now(),
+        });
+    }
+
+    private updateFlyerProjectiles(playerPos: Vector3, now: number, onHitPlayer: (dmg: number) => void): void {
+        // Player center is roughly 1 unit above root
+        const playerCenter = new Vector3(playerPos.x, playerPos.y + 1, playerPos.z);
+
+        for (let i = this.flyerProjectiles.length - 1; i >= 0; i--) {
+            const p = this.flyerProjectiles[i];
+
+            if (now - p.spawnTime > FLYER_PROJECTILE_LIFETIME || p.mesh.position.y < -1) {
+                p.mesh.dispose();
+                this.flyerProjectiles.splice(i, 1);
+                continue;
+            }
+
+            p.mesh.position.addInPlace(p.vel);
+
+            if (Vector3.Distance(p.mesh.position, playerCenter) < FLYER_HIT_RADIUS) {
+                onHitPlayer(FLYER_PROJECTILE_DAMAGE);
+                p.mesh.dispose();
+                this.flyerProjectiles.splice(i, 1);
             }
         }
     }

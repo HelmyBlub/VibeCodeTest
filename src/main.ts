@@ -15,8 +15,9 @@ import { DamageNumbers } from './damagenumbers';
 import {
     BOSS_MAX_HP, BOSS_MELEE_DAMAGE,
     BOUNDARY, DEV_MODE, ENEMY_MAX_HP, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
+    FLYER_BOSS_HP_MULT,
 } from './constants';
-import type { Spell, SpellElement, SpellMod, SpellStage, StageElement } from './types';
+import type { EnemyType, Spell, SpellElement, SpellMod, SpellStage, StageElement } from './types';
 
 const canvas = document.getElementById('renderCanvas') as HTMLCanvasElement;
 const engine = new Engine(canvas, true);
@@ -147,12 +148,19 @@ let spellbookDroppedAt  = 0;     // timestamp when spellbook was placed; 0 = non
 
 const SPELLBOOK_TIMEOUT_MS = 15000; // force next boss if spellbook not picked up within this
 
+// Boss cycle: brute → regen → flyer → brute → ...
+const BOSS_SEQUENCE: EnemyType[] = ['brute', 'regen', 'flyer'];
+let bossSequenceIndex = 0;
+
+// Normal spawn pool: starts with simple, gains defeated boss types (max 2)
+let normalSpawnPool: EnemyType[] = ['simple'];
+
 function waveNormalHp(): number {
     return Math.round(ENEMY_MAX_HP * (1 + (waveNumber - 1) * 0.3));
 }
 
-function waveEnemyType(): 'simple' | 'brute' {
-    return waveNumber % 2 === 1 ? 'simple' : 'brute';
+function pickNormalType(): EnemyType {
+    return normalSpawnPool[Math.floor(Math.random() * normalSpawnPool.length)];
 }
 
 function randomEdgePos(): { x: number; z: number } {
@@ -170,14 +178,26 @@ function randomEdgePos(): { x: number; z: number } {
 function spawnBossNow(): void {
     bossSpawnPending = false;
     const { x, z } = randomEdgePos();
-    const bossHp  = Math.round(BOSS_MAX_HP  * (1 + (waveNumber - 1) * 0.5));
+    const bossType  = BOSS_SEQUENCE[bossSequenceIndex % BOSS_SEQUENCE.length];
+    const bossHpBase = Math.round(BOSS_MAX_HP * (1 + (waveNumber - 1) * 0.5));
+    const bossHp  = bossType === 'flyer' ? Math.round(bossHpBase * FLYER_BOSS_HP_MULT) : bossHpBase;
     const bossDmg = Math.round(BOSS_MELEE_DAMAGE * (1 + (waveNumber - 1) * 0.25));
-    enemyManager.spawnBoss(x, z, bossHp, bossDmg, () => {
+
+    enemyManager.spawnBoss(x, z, bossHp, bossDmg, bossType, () => {
         waveNumber++;
         hud.updateWave(waveNumber);
-        // Boss died — drop spellbook at its last known position
+
+        // Unlock this type as a normal enemy; keep only the 2 most recent
+        if (!normalSpawnPool.includes(bossType)) {
+            normalSpawnPool.push(bossType);
+            if (normalSpawnPool.length > 2) normalSpawnPool.shift();
+        }
+        bossSequenceIndex++;
+
+        // Drop spellbook at boss's last position
         const boss = enemyManager.enemies.find(e => e.isBoss);
-        const dropPos = boss?.root.position ?? new Vector3(x, 0, z);
+        const dropPos = boss?.root.position.clone() ?? new Vector3(x, 0, z);
+        dropPos.y = 0;
         spellbooks.push(new SpellbookPickup(scene, dropPos));
         spellbookDroppedAt = Date.now();
     });
@@ -346,7 +366,7 @@ scene.onBeforeRenderObservable.add(() => {
     if (now - lastSpawnTime > ENEMY_SPAWN_INTERVAL && enemyManager.normalCount < ENEMY_MAX_NORMAL) {
         lastSpawnTime = now;
         const { x, z } = randomEdgePos();
-        enemyManager.spawn(x, z, waveNormalHp(), waveEnemyType());
+        enemyManager.spawn(x, z, waveNormalHp(), pickNormalType());
     }
 
     // Force next boss if spellbook sits uncollected too long; pauses while choice is open

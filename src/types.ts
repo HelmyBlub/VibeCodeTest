@@ -1,6 +1,6 @@
 import type { Mesh, PointLight, TransformNode, Vector3 } from '@babylonjs/core';
 
-export type EnemyType = 'simple' | 'brute';
+export type EnemyType = 'simple' | 'brute' | 'regen' | 'flyer';
 
 export interface Enemy {
     root: TransformNode;
@@ -23,6 +23,18 @@ export interface Enemy {
     lastBurnTick: number;
     slowEnd:      number;
     slowFactor:   number;
+    // regen type
+    regenRate:    number;   // HP/sec; 0 for non-regen
+    lastRegen:    number;
+    // flyer type
+    lastShot:     number;   // timestamp of last projectile; 0 for non-flyers
+    extraMeshes:  Mesh[];   // wings and extras — disposed on kill
+}
+
+export interface FlyerProjectile {
+    mesh:      Mesh;
+    vel:       Vector3;
+    spawnTime: number;
 }
 
 export interface Fireball {
