@@ -29,6 +29,15 @@ export interface Enemy {
     // flyer type
     lastShot:     number;   // timestamp of last projectile; 0 for non-flyers
     extraMeshes:  Mesh[];   // wings and extras — disposed on kill
+    // aggro / leash
+    homePos:      Vector3;  // spawn position to return to when player is far
+    aggroRange:   number;   // 0 = always aggro; >0 = leash range
+    aggroed:      boolean;
+    // aggro indicator
+    aggroIndicator: Mesh;
+    lastAggroAt:    number;
+    // per-enemy death callback (used by bosses)
+    onDeath?:     (pos: Vector3) => void;
 }
 
 export interface FlyerProjectile {

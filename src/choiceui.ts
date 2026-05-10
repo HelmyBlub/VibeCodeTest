@@ -71,6 +71,38 @@ export class ChoiceUI {
         });
     }
 
+    showFound(content: string, onContinue: () => void): void {
+        this.el.innerHTML = `
+            <div style="color:#fff;font-size:22px;font-weight:600;text-shadow:0 0 12px #9955ff;margin-bottom:4px">
+                Spell Book Found!
+            </div>
+            <div style="
+                background:#16102a;color:#eee;
+                border:2px solid #7733cc;border-radius:14px;
+                padding:28px 36px;font-size:16px;
+                min-width:180px;max-width:220px;text-align:center;
+            ">
+                <div style="font-size:52px;margin-bottom:12px;font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">
+                    ${ITEM_ICON[content] ?? content}
+                </div>
+                <div style="font-weight:700;font-size:20px;margin-bottom:10px">${ITEM_NAME[content] ?? content}</div>
+                <div style="font-size:13px;color:#bbb;line-height:1.5">${ITEM_DESC[content] ?? ''}</div>
+            </div>
+            <button id="spell-found-continue" style="
+                background:#2a1a4a;color:#ddd;
+                border:2px solid #7733cc;border-radius:10px;
+                padding:12px 36px;font-size:15px;cursor:pointer;
+                margin-top:4px;transition:border-color 0.15s;
+            ">Continue</button>
+        `;
+        this.el.style.display = 'flex';
+
+        const btn = document.getElementById('spell-found-continue')!;
+        btn.addEventListener('mouseenter', () => { btn.style.borderColor = '#cc88ff'; });
+        btn.addEventListener('mouseleave', () => { btn.style.borderColor = '#7733cc'; });
+        btn.addEventListener('click', () => { this.hide(); onContinue(); });
+    }
+
     hide(): void {
         this.el.style.display = 'none';
     }

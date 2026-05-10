@@ -5,7 +5,7 @@ export const DEV_MODE = true;
 export const MOVE_SPEED = 0.1;
 export const GRAVITY = -0.01;
 export const JUMP_FORCE = 0.25;
-export const BOUNDARY = 47;
+export const BOUNDARY = 150;
 export const PLAYER_MAX_HP = 100;
 
 // Camera
@@ -109,3 +109,7 @@ export const FLYER_PROJECTILE_DAMAGE   = 15;
 export const FLYER_HIT_RADIUS          = 1.0;   // 3D hit radius
 export const FLYER_PROJECTILE_LIFETIME = 7000;  // ms failsafe expiry
 export const FLYER_BOSS_HP_MULT        = 0.6;   // boss flyer has less HP (hard aerial target)
+
+// Aggro / leash
+export const CAMP_PATROL_AGGRO  = 35;  // normal camp enemies start chasing within this range
+export const BOSS_AGGRO_RANGE   = 55;  // boss aggro range

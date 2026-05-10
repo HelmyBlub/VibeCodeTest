@@ -34,6 +34,7 @@ export class HUD {
             zIndex:        '50',
         });
         this.waveEl.textContent = 'WAVE 1';
+        this.waveEl.style.display = 'none'; // no waves in open world
         document.body.appendChild(this.waveEl);
 
         this.hitFlashEl = document.createElement('div');

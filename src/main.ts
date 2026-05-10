@@ -14,7 +14,7 @@ import { TypeLevelSystem } from './typelevel';
 import { DamageNumbers } from './damagenumbers';
 import {
     BOSS_MAX_HP, BOSS_MELEE_DAMAGE,
-    BOUNDARY, DEV_MODE, ENEMY_MAX_HP, ENEMY_MAX_NORMAL, ENEMY_SPAWN_INTERVAL, MANA_REGEN_RATE,
+    BOUNDARY, DEV_MODE, MANA_REGEN_RATE,
     FLYER_BOSS_HP_MULT,
 } from './constants';
 import type { EnemyType, Spell, SpellElement, SpellMod, SpellStage, StageElement } from './types';
@@ -82,9 +82,9 @@ function makeStarterStage(element: SpellElement): SpellStage {
         count: 1, spread: 0, yawSpread: 0,
         stationary: false, trigger: 'delay', triggerMs: 500, duration: 3000,
         damage:      calcDamage(50, 0),
-        burnDamage:  element === 'fire'      ? calcBurnDamage(50, 0) : 0,
-        burnDuration: element === 'fire'     ? 3000 : undefined,
-        slowPercent:  element === 'ice'      ? 50   : undefined,
+        burnDamage:  element === 'fire'       ? calcBurnDamage(50, 0) : 0,
+        burnDuration: element === 'fire'      ? 3000 : undefined,
+        slowPercent:  element === 'ice'       ? 50   : undefined,
         jumpCount:    element === 'lightning' ? 2    : undefined,
         offsetX: 0, offsetY: 0, offsetZ: 0,
         children: [],
@@ -136,76 +136,106 @@ function fireSpell(spell: Spell, slotIndex: number): void {
     slotCooldownMs[slotIndex] = spell.cooldown;
 }
 
-// ── Game loop state ───────────────────────────────────────────────────────────
+// ── Open world: camps ────────────────────────────────────────────────────────
 
-let spellbooks:         SpellbookPickup[] = [];
-let choiceOpen          = false;
-let lastSpawnTime       = 0;
-let bossSpawnPending    = true;   // spawn first boss shortly after game start
-let bossSpawnAt         = Date.now() + 5000; // 5s initial delay
-let waveNumber          = 1;
-let spellbookDroppedAt  = 0;     // timestamp when spellbook was placed; 0 = none pending
-
-const SPELLBOOK_TIMEOUT_MS = 15000; // force next boss if spellbook not picked up within this
-
-// Boss cycle: brute → regen → flyer → brute → ...
-const BOSS_SEQUENCE: EnemyType[] = ['brute', 'regen', 'flyer'];
-let bossSequenceIndex = 0;
-
-// Normal spawn pool: starts with simple, gains defeated boss types (max 2)
-let normalSpawnPool: EnemyType[] = ['simple'];
-
-function waveNormalHp(): number {
-    return Math.round(ENEMY_MAX_HP * (1 + (waveNumber - 1) * 0.3));
+interface Camp {
+    center:       { x: number; z: number };
+    bossType:     EnemyType;
+    bossDrop:     string;       // specific unlockable this boss drops
+    bossHp:       number;
+    bossDmg:      number;
+    patrolCount:  number;
+    patrolRadius: number;
+    bossDefeated: boolean;
 }
 
-function pickNormalType(): EnemyType {
-    return normalSpawnPool[Math.floor(Math.random() * normalSpawnPool.length)];
+const camps: Camp[] = [
+    {
+        center: { x: -70, z: -60 }, bossType: 'brute', bossDrop: 'fire',
+        bossHp: BOSS_MAX_HP, bossDmg: BOSS_MELEE_DAMAGE,
+        patrolCount: 4, patrolRadius: 22,
+        bossDefeated: false,
+    },
+    {
+        center: { x: 80, z: -80 }, bossType: 'regen', bossDrop: 'ice',
+        bossHp: BOSS_MAX_HP, bossDmg: Math.round(BOSS_MELEE_DAMAGE * 0.75),
+        patrolCount: 4, patrolRadius: 22,
+        bossDefeated: false,
+    },
+    {
+        center: { x: 0, z: 120 }, bossType: 'flyer', bossDrop: 'carrier',
+        bossHp: Math.round(BOSS_MAX_HP * FLYER_BOSS_HP_MULT), bossDmg: Math.round(BOSS_MELEE_DAMAGE * 0.75),
+        patrolCount: 3, patrolRadius: 28,
+        bossDefeated: false,
+    },
+];
+
+// If a boss would drop the player's starting element, swap it for lightning
+// (which is normally a world book) so the player always gets a new unlock from each boss
+for (const camp of camps) {
+    if (camp.bossDrop === startElement) camp.bossDrop = 'lightning';
 }
 
-function randomEdgePos(): { x: number; z: number } {
-    const edge = BOUNDARY - 3;
-    const side = Math.floor(Math.random() * 4);
-    const along = (Math.random() * 2 - 1) * edge;
-    switch (side) {
-        case 0: return { x: -edge, z: along };
-        case 1: return { x:  edge, z: along };
-        case 2: return { x: along, z: -edge };
-        default: return { x: along, z:  edge };
+// World spellbooks for the remaining unlockables, scattered across the map
+const WORLD_BOOK_DEFS: { content: string; x: number; z: number }[] = [
+    { content: 'lightning', x:  35, z:  22 },
+    { content: 'heal',      x: -42, z:  28 },
+    { content: 'cloud',     x:  18, z: -42 },
+    { content: 'castTime',  x: -32, z: -52 },
+    { content: 'cooldown',  x:  52, z:  58 },
+];
+
+function spawnCamp(camp: Camp): void {
+    const { x, z } = camp.center;
+
+    // Patrol enemies evenly around the camp center
+    for (let i = 0; i < camp.patrolCount; i++) {
+        const angle = (i / camp.patrolCount) * Math.PI * 2;
+        const r = camp.patrolRadius * (0.5 + Math.random() * 0.5);
+        enemyManager.spawn(x + Math.cos(angle) * r, z + Math.sin(angle) * r, undefined, camp.bossType);
     }
-}
 
-function spawnBossNow(): void {
-    bossSpawnPending = false;
-    const { x, z } = randomEdgePos();
-    const bossType  = BOSS_SEQUENCE[bossSequenceIndex % BOSS_SEQUENCE.length];
-    const bossHpBase = Math.round(BOSS_MAX_HP * (1 + (waveNumber - 1) * 0.5));
-    const bossHp  = bossType === 'flyer' ? Math.round(bossHpBase * FLYER_BOSS_HP_MULT) : bossHpBase;
-    const bossDmg = Math.round(BOSS_MELEE_DAMAGE * (1 + (waveNumber - 1) * 0.25));
-
-    enemyManager.spawnBoss(x, z, bossHp, bossDmg, bossType, () => {
-        waveNumber++;
-        hud.updateWave(waveNumber);
-
-        // Unlock this type as a normal enemy; keep only the 2 most recent
-        if (!normalSpawnPool.includes(bossType)) {
-            normalSpawnPool.push(bossType);
-            if (normalSpawnPool.length > 2) normalSpawnPool.shift();
-        }
-        bossSequenceIndex++;
-
-        // Drop spellbook at boss's last position
-        const boss = enemyManager.enemies.find(e => e.isBoss);
-        const dropPos = boss?.root.position.clone() ?? new Vector3(x, 0, z);
-        dropPos.y = 0;
-        spellbooks.push(new SpellbookPickup(scene, dropPos));
-        spellbookDroppedAt = Date.now();
+    // Boss — drops its specific spellbook at its actual death position
+    enemyManager.spawnBoss(x + 4, z + 4, camp.bossHp, camp.bossDmg, camp.bossType, (deathPos) => {
+        camp.bossDefeated = true;
+        spellbooks.push(new SpellbookPickup(scene, deathPos, camp.bossDrop));
     });
 }
 
+// Spawn all camps at game start — enemies stay put until player enters aggro range
+for (const camp of camps) spawnCamp(camp);
+
+// ── Spellbooks ────────────────────────────────────────────────────────────────
+
+let spellbooks: SpellbookPickup[] = [];
+let pickupOpen = false;
+
+// Place world spellbooks at game start
+function initWorldBooks(): void {
+    const bossDrops = new Set(camps.map(c => c.bossDrop));
+    for (const def of WORLD_BOOK_DEFS) {
+        if (unlocked.has(def.content as StageElement)) continue;
+        if (unlockedMods.has(def.content as SpellMod)) continue;
+        if (bossDrops.has(def.content)) continue; // boss already covers this element
+        spellbooks.push(new SpellbookPickup(scene, new Vector3(def.x, 0, def.z), def.content));
+    }
+}
+initWorldBooks();
+
+function unlockContent(content: string): void {
+    if (ALL_SPELL_MODS.includes(content as SpellMod)) {
+        unlockedMods.add(content as SpellMod);
+        spellCreator.setUnlockedMods(unlockedMods);
+    } else {
+        unlocked.add(content as StageElement);
+        spellCreator.setUnlockedTypes(unlocked);
+    }
+    syncLevels();
+}
+
 function handlePickup(): void {
-    if (choiceOpen || spellbooks.length === 0) return;
-    // Animate all books; pick up the first one in range
+    if (pickupOpen || spellbooks.length === 0) return;
+
     let pickedIdx = -1;
     for (let i = 0; i < spellbooks.length; i++) {
         const inRange = spellbooks[i].update(player.position);
@@ -213,43 +243,14 @@ function handlePickup(): void {
     }
     if (pickedIdx === -1) return;
 
-    spellbooks.splice(pickedIdx, 1)[0].dispose();
-    choiceOpen = true;
+    const book = spellbooks.splice(pickedIdx, 1)[0];
+    const content = book.content;
+    book.dispose();
+    pickupOpen = true;
 
-    // Build 3 random choices from not-yet-unlocked types AND spell mods
-    const pool: string[] = [
-        ...ALL_TYPES.filter(t => !unlocked.has(t)),
-        ...ALL_SPELL_MODS.filter(m => !unlockedMods.has(m)),
-    ];
-    const choices: string[] = [];
-    while (choices.length < 3 && pool.length > 0) {
-        const idx = Math.floor(Math.random() * pool.length);
-        choices.push(pool.splice(idx, 1)[0]);
-    }
-
-    if (choices.length === 0) {
-        // Everything already unlocked — just spawn next boss
-        choiceOpen = false;
-        spellbookDroppedAt = 0;
-        bossSpawnPending = true;
-        bossSpawnAt = Date.now() + 2000;
-        return;
-    }
-
-    choiceUI.show(choices, (picked) => {
-        if (ALL_SPELL_MODS.includes(picked as SpellMod)) {
-            unlockedMods.add(picked as SpellMod);
-            spellCreator.setUnlockedMods(unlockedMods);
-            syncLevels();
-        } else {
-            unlocked.add(picked as StageElement);
-            spellCreator.setUnlockedTypes(unlocked);
-            syncLevels();
-        }
-        choiceOpen = false;
-        spellbookDroppedAt = 0;
-        bossSpawnPending = true;
-        bossSpawnAt = Date.now() + 2000;
+    choiceUI.showFound(content, () => {
+        unlockContent(content);
+        pickupOpen = false;
     });
 }
 
@@ -273,7 +274,6 @@ window.addEventListener('keydown', e => {
             for (let i = 0; i < 4; i++) {
                 if (slotLastCast[i] > 0) slotLastCast[i] += paused;
             }
-            if (spellbookDroppedAt > 0) spellbookDroppedAt += paused;
             combat.resyncClock();
         }
         spellCreator.toggle();
@@ -290,7 +290,7 @@ window.addEventListener('keydown', e => {
         return;
     }
 
-    if (spellCreator.visible || !player.alive || choiceOpen) return;
+    if (spellCreator.visible || !player.alive || pickupOpen) return;
 
     const isJump = e.key === ' ';
     if (casting && (INTERRUPT_KEYS.includes(e.key.toLowerCase()) || (isJump && player.onGround))) {
@@ -334,7 +334,7 @@ scene.onBeforeRenderObservable.add(() => {
         spellCreator.visible ? creatorOpenedAt : undefined);
     damageNumbers.update();
 
-    if (spellCreator.visible || choiceOpen) return;
+    if (spellCreator.visible || pickupOpen) return;
 
     const jumpInterrupt = input.keys[' '] && player.onGround;
     if (casting && (INTERRUPT_KEYS.some(k => input.keys[k]) || jumpInterrupt)) {
@@ -358,28 +358,6 @@ scene.onBeforeRenderObservable.add(() => {
 
     if (player.alive) {
         enemyManager.update(player.position, dmg => player.takeDamage(dmg));
-    }
-
-    const now = Date.now();
-
-    // Normal enemy spawning — up to ENEMY_MAX_NORMAL at a time
-    if (now - lastSpawnTime > ENEMY_SPAWN_INTERVAL && enemyManager.normalCount < ENEMY_MAX_NORMAL) {
-        lastSpawnTime = now;
-        const { x, z } = randomEdgePos();
-        enemyManager.spawn(x, z, waveNormalHp(), pickNormalType());
-    }
-
-    // Force next boss if spellbook sits uncollected too long; pauses while choice is open
-    if (!bossSpawnPending && !enemyManager.bossAlive && spellbookDroppedAt > 0 && !choiceOpen
-            && now - spellbookDroppedAt >= SPELLBOOK_TIMEOUT_MS) {
-        spellbookDroppedAt = 0;
-        bossSpawnPending = true;
-        bossSpawnAt = now;
-    }
-
-    // Boss spawning
-    if (bossSpawnPending && !enemyManager.bossAlive && now >= bossSpawnAt) {
-        spawnBossNow();
     }
 
     // Spellbook pickup

@@ -10,6 +10,7 @@ import {
     FLYER_HP_MULT, FLYER_SPEED, FLYER_HEIGHT, FLYER_MIN_DIST, FLYER_MAX_DIST,
     FLYER_SHOOT_RANGE, FLYER_SHOT_INTERVAL, FLYER_PROJECTILE_SPEED, FLYER_PROJECTILE_DAMAGE,
     FLYER_HIT_RADIUS, FLYER_PROJECTILE_LIFETIME,
+    CAMP_PATROL_AGGRO, BOSS_AGGRO_RANGE,
 } from './constants';
 import type { Enemy, EnemyType, FlyerProjectile } from './types';
 
@@ -30,10 +31,10 @@ export class EnemyManager {
     private readonly hpBarMat:      StandardMaterial;
     private readonly bossHpBarMat:  StandardMaterial;
     private readonly burnMat:       StandardMaterial;
-    private readonly flyerProjMat:  StandardMaterial;
+    private readonly flyerProjMat:    StandardMaterial;
+    private readonly aggroIndicatorMat: StandardMaterial;
 
     private readonly flyerProjectiles: FlyerProjectile[] = [];
-    private bossDeath: (() => void) | null = null;
 
     constructor(private readonly scene: Scene) {
         this.bodyMat = new StandardMaterial('enBodyMat', scene);
@@ -83,6 +84,10 @@ export class EnemyManager {
         this.flyerProjMat = new StandardMaterial('flyerProjMat', scene);
         this.flyerProjMat.diffuseColor  = new Color3(0.9, 0.2, 0.85);
         this.flyerProjMat.emissiveColor = new Color3(0.55, 0.08, 0.5);
+
+        this.aggroIndicatorMat = new StandardMaterial('aggroIndicatorMat', scene);
+        this.aggroIndicatorMat.diffuseColor  = new Color3(1.0, 0.85, 0.0);
+        this.aggroIndicatorMat.emissiveColor = new Color3(0.8, 0.6, 0.0);
     }
 
     get normalCount(): number {
@@ -170,19 +175,22 @@ export class EnemyManager {
         burnIndicator.position.y = burnY; burnIndicator.parent = root;
         burnIndicator.material = this.burnMat; burnIndicator.isVisible = false;
 
+        const aggroIndicator = this.makeAggroIndicator(`enAggro${id}`, hpBarY + 0.7, root);
+
         this.enemies.push({
-            root, eb, eh, hpBg, hpBar, burnIndicator, extraMeshes,
+            root, eb, eh, hpBg, hpBar, burnIndicator, aggroIndicator, extraMeshes,
             hp, maxHp: hp, isBoss: false, type, speed,
             lastMelee: 0, meleeDamage: ENEMY_MELEE_DAMAGE,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
             slowEnd: 0, slowFactor: 1,
             regenRate: type === 'regen' ? REGEN_RATE : 0, lastRegen: 0,
             lastShot: 0,
+            homePos: root.position.clone(), aggroRange: CAMP_PATROL_AGGRO, aggroed: false,
+            lastAggroAt: 0,
         });
     }
 
-    spawnBoss(x: number, z: number, hp: number, meleeDamage: number, type: EnemyType, onDeath: () => void): void {
-        this.bossDeath = onDeath;
+    spawnBoss(x: number, z: number, hp: number, meleeDamage: number, type: EnemyType, onDeath: (pos: Vector3) => void): void {
         const id = this.enemies.length;
         const s = 1 / BOSS_SCALE; // local-space compensator for HP bar
         const yPos = type === 'flyer' ? FLYER_HEIGHT : 0;
@@ -249,33 +257,63 @@ export class EnemyManager {
         burnIndicator.position.y = burnY; burnIndicator.parent = root;
         burnIndicator.material = this.burnMat; burnIndicator.isVisible = false;
 
+        const aggroIndicator = this.makeAggroIndicator(`bossAggro${id}`, hpBarY + 0.5 / BOSS_SCALE, root);
+
         const bossSpeed = type === 'flyer' ? FLYER_SPEED
             : type === 'brute' ? BRUTE_SPEED
             : ENEMY_SPEED;
 
         this.enemies.push({
-            root, eb, eh, hpBg, hpBar, burnIndicator, extraMeshes,
+            root, eb, eh, hpBg, hpBar, burnIndicator, aggroIndicator, extraMeshes,
             hp, maxHp: hp, isBoss: true, type, speed: bossSpeed,
             lastMelee: 0, meleeDamage,
             burnEnd: 0, burnDamage: 0, lastBurnTick: 0,
             slowEnd: 0, slowFactor: 1,
             regenRate: type === 'regen' ? REGEN_RATE * 2 : 0, lastRegen: 0,
             lastShot: 0,
+            homePos: root.position.clone(), aggroRange: BOSS_AGGRO_RANGE, aggroed: false,
+            lastAggroAt: 0, onDeath,
         });
+    }
+
+    private makeAggroIndicator(name: string, localY: number, parent: TransformNode): Mesh {
+        // Two billboard boxes forming a '!' above the HP bar
+        const bar = MeshBuilder.CreateBox(`${name}Bar`, { width: 0.12, height: 0.3, depth: 0.12 }, this.scene);
+        bar.position.y = localY + 0.15; bar.parent = parent;
+        bar.material = this.aggroIndicatorMat;
+        bar.billboardMode = Mesh.BILLBOARDMODE_ALL;
+        bar.isVisible = false;
+
+        const dot = MeshBuilder.CreateBox(`${name}Dot`, { width: 0.12, height: 0.12, depth: 0.12 }, this.scene);
+        dot.position.y = localY - 0.12; dot.parent = parent;
+        dot.material = this.aggroIndicatorMat;
+        dot.billboardMode = Mesh.BILLBOARDMODE_ALL;
+        dot.isVisible = false;
+
+        // Return the bar as the "handle" — store dot in extraMeshes via caller is impractical,
+        // so attach dot as metadata on bar for joint disposal
+        (bar as any)._aggroDot = dot;
+        return bar;
     }
 
     kill(en: Enemy): void {
         this.onKill?.(en);
-        const wasBoss = en.isBoss;
+        const deathPos = new Vector3(en.root.position.x, 0, en.root.position.z);
+        const onDeath  = en.onDeath;
         en.eb.dispose(); en.eh.dispose();
         en.hpBg.dispose(); en.hpBar.dispose();
         en.burnIndicator.dispose();
+        const dot = (en.aggroIndicator as any)._aggroDot as Mesh | undefined;
+        dot?.dispose(); en.aggroIndicator.dispose();
         for (const m of en.extraMeshes) m.dispose();
         en.root.dispose();
-        if (wasBoss) {
-            this.bossDeath?.();
-            this.bossDeath = null;
-        }
+        onDeath?.(deathPos);
+    }
+
+    private setAggroVisible(en: Enemy, visible: boolean): void {
+        en.aggroIndicator.isVisible = visible;
+        const dot = (en.aggroIndicator as any)._aggroDot as Mesh | undefined;
+        if (dot) dot.isVisible = visible;
     }
 
     private cleanup(): void {
@@ -313,6 +351,9 @@ export class EnemyManager {
             } else {
                 this.updateGroundEnemy(en, playerPos, now, onHitPlayer);
             }
+
+            // Aggro indicator: show for 1.5 s after first noticing the player
+            this.setAggroVisible(en, en.lastAggroAt > 0 && now - en.lastAggroAt < 1500);
         }
 
         this.updateFlyerProjectiles(playerPos, now, onHitPlayer);
@@ -327,13 +368,40 @@ export class EnemyManager {
         toPlayer.y = 0;
         const dist = toPlayer.length();
 
+        // Aggro / leash: aggro at aggroRange, leash at aggroRange * 1.5
+        if (en.aggroRange > 0) {
+            if (dist <= en.aggroRange && !en.aggroed) {
+                en.aggroed = true;
+                en.lastAggroAt = now;
+            }
+            if (dist > en.aggroRange * 1.5) en.aggroed = false;
+
+            if (!en.aggroed) {
+                const toHome = en.homePos.subtract(en.root.position);
+                toHome.y = 0;
+                if (toHome.length() > 0.5) {
+                    const step = toHome.normalize().scaleInPlace(speed * 1.5);
+                    en.root.position.addInPlace(step);
+                    en.root.rotation.y = Math.atan2(step.x, step.z);
+                    en.root.position.y = Math.max(0, Math.sin(now / 130 + en.maxHp * 0.05) * 0.1);
+                } else {
+                    en.root.position.y = 0;
+                }
+                return;
+            }
+        }
+
         if (dist > effectiveRange) {
             const step = toPlayer.normalize().scaleInPlace(speed);
             en.root.position.addInPlace(step);
             en.root.rotation.y = Math.atan2(step.x, step.z);
-        } else if (now - en.lastMelee > meleeInterval) {
-            en.lastMelee = now;
-            onHitPlayer(en.meleeDamage);
+            en.root.position.y = Math.max(0, Math.sin(now / 130 + en.maxHp * 0.05) * 0.12);
+        } else {
+            en.root.position.y = 0;
+            if (now - en.lastMelee > meleeInterval) {
+                en.lastMelee = now;
+                onHitPlayer(en.meleeDamage);
+            }
         }
     }
 
@@ -346,6 +414,24 @@ export class EnemyManager {
         toPlayer.y = 0;
         const dist = toPlayer.length();
         const speed = now < en.slowEnd ? en.speed * en.slowFactor : en.speed;
+
+        // Aggro / leash (horizontal)
+        if (en.aggroRange > 0) {
+            if (dist <= en.aggroRange && !en.aggroed) {
+                en.aggroed = true;
+                en.lastAggroAt = now;
+            }
+            if (dist > en.aggroRange * 1.5) en.aggroed = false;
+
+            if (!en.aggroed) {
+                const toHome = new Vector3(en.homePos.x - en.root.position.x, 0, en.homePos.z - en.root.position.z);
+                if (toHome.length() > 0.5) {
+                    const step = toHome.normalize().scaleInPlace(speed * 1.5);
+                    en.root.position.addInPlace(step);
+                }
+                return;
+            }
+        }
 
         if (dist < FLYER_MIN_DIST) {
             // Back away from player
