@@ -1,63 +1,20 @@
 import {
-    Color3, Color4, DirectionalLight, HemisphericLight,
-    MeshBuilder, Scene, StandardMaterial, Vector3,
+    Color4, DirectionalLight, HemisphericLight, Scene, Vector3,
 } from '@babylonjs/core';
+import { buildTerrain } from './world/terrain';
+import { buildVillage } from './world/village';
+import { buildPuzzleMarkers } from './world/markers';
 
 export function buildEnvironment(scene: Scene): void {
     scene.clearColor = new Color4(0.45, 0.65, 0.9, 1);
 
     const hemi = new HemisphericLight('hemi', new Vector3(0, 1, 0), scene);
-    hemi.intensity = 0.7;
+    hemi.intensity = 0.75;
     const sun = new DirectionalLight('sun', new Vector3(-1, -2, -1), scene);
-    sun.intensity = 0.5;
+    sun.intensity = 0.55;
     sun.position = new Vector3(30, 50, 30);
 
-    const ground = MeshBuilder.CreateGround('ground', { width: 310, height: 310 }, scene);
-    const groundMat = new StandardMaterial('groundMat', scene);
-    groundMat.diffuseColor = new Color3(0.25, 0.55, 0.15);
-    groundMat.specularColor = new Color3(0, 0, 0);
-    ground.material = groundMat;
-
-    // ── Trees ─────────────────────────────────────────────────────────────────
-
-    const foliageMat = new StandardMaterial('foliageMat', scene);
-    foliageMat.diffuseColor = new Color3(0.1, 0.4, 0.1);
-    const trunkMat = new StandardMaterial('trunkMat', scene);
-    trunkMat.diffuseColor = new Color3(0.4, 0.25, 0.1);
-
-    const treePositions: [number, number][] = [
-        // near spawn
-        [8, 8], [-10, 5], [5, -12], [-7, -9], [15, -3], [-14, 12], [12, 15], [-5, 18],
-        // mid-range scatter
-        [40, 10], [-35, 25], [25, -45], [-50, -15], [60, -30], [-45, 55],
-        [30, 70], [-60, 40], [70, 50], [-25, -70], [50, -65], [-70, -30],
-        // far out
-        [90, -20], [-90, 60], [20, 100], [-30, 110], [100, 80], [-80, 90],
-        [110, -60], [-110, -50], [0, -100], [65, 110],
-    ];
-    treePositions.forEach(([x, z], i) => {
-        const trunk = MeshBuilder.CreateCylinder(`trunk${i}`, { height: 2, diameterTop: 0.3, diameterBottom: 0.45 }, scene);
-        trunk.position = new Vector3(x, 1, z);
-        trunk.material = trunkMat;
-        const foliage = MeshBuilder.CreateSphere(`foliage${i}`, { diameter: 3, segments: 6 }, scene);
-        foliage.position = new Vector3(x, 3.6, z);
-        foliage.scaling.y = 1.2;
-        foliage.material = foliageMat;
-    });
-
-    // ── Rocks ─────────────────────────────────────────────────────────────────
-
-    const rockMat = new StandardMaterial('rockMat', scene);
-    rockMat.diffuseColor = new Color3(0.5, 0.5, 0.5);
-    const rockPositions: [number, number][] = [
-        [3, 6], [-4, -3], [10, -8], [-12, -6],
-        [45, -10], [-38, 42], [22, 80], [-55, -40],
-    ];
-    rockPositions.forEach(([x, z], i) => {
-        const rock = MeshBuilder.CreateSphere(`rock${i}`, { diameter: 1.2, segments: 5 }, scene);
-        rock.position = new Vector3(x, 0.4, z);
-        rock.scaling = new Vector3(1, 0.65, 1.3);
-        rock.material = rockMat;
-    });
-
+    buildTerrain(scene);
+    buildVillage(scene);
+    buildPuzzleMarkers(scene);
 }

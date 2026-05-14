@@ -1,6 +1,7 @@
 import {
     Color3, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3,
 } from '@babylonjs/core';
+import { getTerrainHeight } from './world/terrain';
 import {
     BOSS_MELEE_INTERVAL, BOSS_SCALE,
     BRUTE_HP_MULT, BRUTE_SPEED,
@@ -383,10 +384,8 @@ export class EnemyManager {
                     const step = toHome.normalize().scaleInPlace(speed * 1.5);
                     en.root.position.addInPlace(step);
                     en.root.rotation.y = Math.atan2(step.x, step.z);
-                    en.root.position.y = Math.max(0, Math.sin(now / 130 + en.maxHp * 0.05) * 0.1);
-                } else {
-                    en.root.position.y = 0;
                 }
+                en.root.position.y = getTerrainHeight(en.root.position.x, en.root.position.z);
                 return;
             }
         }
@@ -395,19 +394,18 @@ export class EnemyManager {
             const step = toPlayer.normalize().scaleInPlace(speed);
             en.root.position.addInPlace(step);
             en.root.rotation.y = Math.atan2(step.x, step.z);
-            en.root.position.y = Math.max(0, Math.sin(now / 130 + en.maxHp * 0.05) * 0.12);
         } else {
-            en.root.position.y = 0;
             if (now - en.lastMelee > meleeInterval) {
                 en.lastMelee = now;
                 onHitPlayer(en.meleeDamage);
             }
         }
+        en.root.position.y = getTerrainHeight(en.root.position.x, en.root.position.z);
     }
 
     private updateFlyer(en: Enemy, playerPos: Vector3, now: number, onHitPlayer: (dmg: number) => void): void {
-        // Lock to hover height
-        en.root.position.y = FLYER_HEIGHT;
+        // Hover at fixed height above terrain
+        en.root.position.y = getTerrainHeight(en.root.position.x, en.root.position.z) + FLYER_HEIGHT;
 
         // Horizontal distance maintenance
         const toPlayer = playerPos.subtract(en.root.position);

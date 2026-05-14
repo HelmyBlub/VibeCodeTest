@@ -3,6 +3,8 @@ import {
 } from '@babylonjs/core';
 import { BOUNDARY, GRAVITY, JUMP_FORCE, MOVE_SPEED, PLAYER_MAX_HP, PLAYER_MAX_MANA } from './constants';
 import { HUD } from './hud';
+import { getTerrainHeight } from './world/terrain';
+import { HOUSE_COLLIDERS } from './world/village';
 
 export class Player {
     readonly root: TransformNode;
@@ -98,6 +100,22 @@ export class Player {
                 this.root.rotation.y = Math.atan2(this.velX, this.velZ);
             }
 
+            // House wall collision — AABB push-out
+            const PR = 0.45;
+            for (const h of HOUSE_COLLIDERS) {
+                const dx = this.root.position.x - h.x;
+                const dz = this.root.position.z - h.z;
+                const ox = (h.halfW + PR) - Math.abs(dx);
+                const oz = (h.halfD + PR) - Math.abs(dz);
+                if (ox > 0 && oz > 0) {
+                    if (ox < oz) {
+                        this.root.position.x += Math.sign(dx) * ox;
+                    } else {
+                        this.root.position.z += Math.sign(dz) * oz;
+                    }
+                }
+            }
+
             if (keys[' '] && this.onGround) {
                 this.velocityY = JUMP_FORCE;
                 this.onGround = false;
@@ -106,10 +124,13 @@ export class Player {
 
         this.velocityY += GRAVITY;
         this.root.position.y += this.velocityY;
-        if (this.root.position.y <= 0) {
-            this.root.position.y = 0;
+        const groundY = getTerrainHeight(this.root.position.x, this.root.position.z);
+        if (this.root.position.y <= groundY) {
+            this.root.position.y = groundY;
             this.velocityY = 0;
             this.onGround = true;
+        } else {
+            this.onGround = false;
         }
     }
 }

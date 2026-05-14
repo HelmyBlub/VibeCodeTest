@@ -5,7 +5,7 @@ export const DEV_MODE = true;
 export const MOVE_SPEED = 0.1;
 export const GRAVITY = -0.01;
 export const JUMP_FORCE = 0.25;
-export const BOUNDARY = 150;
+export const BOUNDARY = 185;
 export const PLAYER_MAX_HP = 100;
 
 // Camera
